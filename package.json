@@ -1,0 +1,39 @@
+{
+  "name": "joylabs-backend-api",
+  "version": "1.0.0",
+  "description": "Serverless backend API for JoyLabs Catalogue App",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "deploy": "serverless deploy",
+    "deploy:prod": "serverless deploy --stage production"
+  },
+  "keywords": [
+    "serverless",
+    "aws",
+    "lambda",
+    "api"
+  ],
+  "author": "JoyLabs",
+  "license": "MIT",
+  "dependencies": {
+    "aws-sdk": "^2.1499.0",
+    "express": "^4.18.2",
+    "serverless-http": "^3.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "uuid": "^9.0.1",
+    "morgan": "^1.10.0",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.1",
+    "serverless": "^3.38.0",
+    "serverless-dynamodb-local": "^0.2.40",
+    "serverless-offline": "^13.3.0"
+  }
+} 
