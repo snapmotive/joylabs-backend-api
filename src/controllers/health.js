@@ -244,8 +244,123 @@ function renderTestPage(req, res) {
   `);
 }
 
+/**
+ * OAuth Test Page
+ */
+const oauthTestPage = (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>OAuth Test Page</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { 
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          .card {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin: 20px 0;
+            overflow: hidden;
+          }
+          button, .button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin: 5px 0;
+          }
+          button:hover, .button:hover {
+            background: #2b6fc5;
+          }
+          h1, h2 { margin-top: 0; }
+          .code {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+          }
+          #authResult {
+            display: none;
+            margin-top: 20px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>Square OAuth Test</h1>
+          <p>Use the buttons below to test different OAuth flows.</p>
+          
+          <h2>Web OAuth Flow</h2>
+          <a href="/api/auth/square" class="button">Start Web OAuth</a>
+          
+          <h2>Web OAuth with Custom State (for testing)</h2>
+          <a href="/api/auth/square?state=test-state-parameter" class="button">OAuth with Test State</a>
+          
+          <h2>Mobile App OAuth Flow</h2>
+          <button id="mobileOAuthBtn">Simulate Mobile OAuth</button>
+          <div id="authResult" class="card">
+            <h2>Authorization Result</h2>
+            <div id="authResultContent" class="code"></div>
+          </div>
+        </div>
+
+        <script>
+          document.getElementById('mobileOAuthBtn').addEventListener('click', async () => {
+            try {
+              // Step 1: Initialize OAuth parameters
+              const initResponse = await fetch('/api/auth/square/mobile-init');
+              const initData = await initResponse.json();
+              
+              console.log('OAuth Initialization:', initData);
+              
+              // Display the parameters
+              document.getElementById('authResultContent').innerHTML = 
+                'OAuth Parameters:' + 
+                '\\n\\nState: ' + initData.state + 
+                '\\n\\nCode Verifier: ' + initData.codeVerifier +
+                '\\n\\nCode Challenge: ' + initData.codeChallenge +
+                '\\n\\nAuthorization URL: ' + initData.authUrl;
+              
+              document.getElementById('authResult').style.display = 'block';
+              
+              // Step 2: In a real app, you would redirect to the auth URL
+              if (confirm('Open the Square authorization URL?')) {
+                window.open(initData.authUrl, '_blank');
+              }
+            } catch (error) {
+              console.error('Error:', error);
+              document.getElementById('authResultContent').innerHTML = 'Error: ' + error.message;
+              document.getElementById('authResult').style.display = 'block';
+            }
+          });
+        </script>
+      </body>
+    </html>
+  `);
+};
+
+// Export all controller functions
 module.exports = {
   checkHealth,
   checkDetailedHealth,
-  renderTestPage
+  renderTestPage,
+  oauthTestPage
 }; 

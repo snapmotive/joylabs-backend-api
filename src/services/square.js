@@ -119,11 +119,15 @@ const getAuthorizationUrl = async (state, codeChallenge = null) => {
   
   const redirectUrl = `${apiBaseUrl}/api/auth/square/callback`;
   
+  console.log('Redirect URL for OAuth:', redirectUrl);
+  console.log('Using state parameter:', state);
+  
   let url = `${baseUrl}/oauth2/authorize?client_id=${credentials.SQUARE_APPLICATION_ID}&scope=${scopes}&response_type=code&redirect_uri=${encodeURIComponent(redirectUrl)}&state=${state}`;
   
   // Add PKCE parameters if code challenge is provided
   if (codeChallenge) {
     url += `&code_challenge=${codeChallenge}&code_challenge_method=S256`;
+    console.log('Using PKCE with code challenge');
   }
   
   return url;
@@ -146,6 +150,8 @@ const exchangeCodeForToken = async (code, codeVerifier = null) => {
   
   const redirectUrl = `${apiBaseUrl}/api/auth/square/callback`;
   
+  console.log('Exchange token redirect URL:', redirectUrl);
+  
   try {
     const requestBody = {
       client_id: credentials.SQUARE_APPLICATION_ID,
@@ -158,13 +164,21 @@ const exchangeCodeForToken = async (code, codeVerifier = null) => {
     // Add code verifier if provided (for PKCE)
     if (codeVerifier) {
       requestBody.code_verifier = codeVerifier;
+      console.log('Including code verifier for PKCE token exchange');
     }
     
+    console.log('Exchanging code for token with Square...');
     const response = await axios.post(`${baseUrl}/oauth2/token`, requestBody);
     
+    console.log('Token exchange successful');
     return response.data;
   } catch (error) {
     console.error('Error exchanging code for token:', error.response?.data || error.message);
+    if (error.response) {
+      console.error('Status code:', error.response.status);
+      console.error('Response headers:', JSON.stringify(error.response.headers));
+      console.error('Response data:', JSON.stringify(error.response.data));
+    }
     throw new Error('Failed to exchange code for token');
   }
 };

@@ -1,9 +1,12 @@
 const express = require('express');
 const serverless = require('serverless-http');
-const cors = require('cors');
 const morgan = require('morgan');
 const dotenv = require('dotenv');
 const cookieParser = require('cookie-parser');
+const session = require('express-session');
+
+// Custom CORS middleware
+const configureCors = require('./middleware/cors');
 
 // Load environment variables
 dotenv.config();
@@ -11,28 +14,26 @@ dotenv.config();
 // Initialize express app
 const app = express();
 
-// CORS configuration
-const corsOptions = {
-  origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type', 
-    'X-Amz-Date', 
-    'Authorization', 
-    'X-Api-Key', 
-    'X-Amz-Security-Token', 
-    'X-Amz-User-Agent',
-    'X-Requested-With'
-  ],
-  credentials: true,
-  maxAge: 86400 // 24 hours
-};
+// Apply CORS middleware with custom configuration
+app.use(configureCors());
 
-// Middleware
-app.use(cors(corsOptions));
+// Apply middlewares
 app.use(express.json());
 app.use(morgan('dev'));
-app.use(cookieParser());
+app.use(cookieParser(process.env.COOKIE_SECRET || 'joylabs-secret'));
+
+// Configure session
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'joylabs-session-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    sameSite: 'none'
+  }
+}));
 
 // Import routes
 const productRoutes = require('./routes/products');
@@ -52,7 +53,7 @@ app.get('/test', (req, res) => {
 });
 
 // OPTIONS preflight handling for all routes
-app.options('*', cors(corsOptions));
+app.options('*', configureCors());
 
 // Default route
 app.get('/', (req, res) => {

@@ -8,6 +8,9 @@ router.get('/', healthController.checkHealth);
 router.get('/detailed', healthController.checkDetailedHealth);
 router.get('/test-page', healthController.renderTestPage);
 
+// OAuth test page
+router.get('/oauth-test', healthController.oauthTestPage);
+
 // AWS diagnostic route
 router.get('/aws-diagnostic', awsDiagnosticController.runAwsDiagnostic);
 
