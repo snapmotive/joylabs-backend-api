@@ -6,12 +6,20 @@ provider:
   name: aws
   runtime: nodejs18.x
   stage: ${opt:stage, 'dev'}
-  region: ${opt:region, 'us-east-1'}
+  region: ${opt:region, 'us-west-1'}
   environment:
     NODE_ENV: ${self:provider.stage}
-    PRODUCTS_TABLE: joylabs-products-${self:provider.stage}
-    CATEGORIES_TABLE: joylabs-categories-${self:provider.stage}
-    JWT_SECRET: ${env:JWT_SECRET, 'default-secret-key-for-dev-only'}
+    PRODUCTS_TABLE: joylabs-catalog-products-${self:provider.stage}
+    CATEGORIES_TABLE: joylabs-catalog-categories-${self:provider.stage}
+    USERS_TABLE: joylabs-catalog-users-${self:provider.stage}
+    WEBHOOKS_TABLE: joylabs-webhooks-${self:provider.stage}
+    JWT_SECRET: ${env:JWT_SECRET, '${ssm:/joylabs/${self:provider.stage}/jwt-secret~true, "default-secret-key-for-dev-only"}'}
+    SQUARE_APPLICATION_ID: 'sq0idp-WFTYv3An7NPv6ovGFLld1Q'
+    SQUARE_APPLICATION_SECRET: 'sq0csp-z8vgtFYXtjEbXMGW9fjSgw9KsMLzJpoc7RrCCPoLdE4'
+    SQUARE_ENVIRONMENT: 'production'
+    SQUARE_SECRETS_ARN: !Ref SquareCredentialsSecret
+    API_BASE_URL: ${env:API_BASE_URL, 'http://localhost:3001'}
+    API_PROD_URL: https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/${self:provider.stage}
   iamRoleStatements:
     - Effect: Allow
       Action:
@@ -22,9 +30,74 @@ provider:
         - dynamodb:UpdateItem
         - dynamodb:DeleteItem
         - dynamodb:BatchGetItem
+        - dynamodb:ListTables
       Resource:
         - !GetAtt ProductsTable.Arn
         - !GetAtt CategoriesTable.Arn
+        - !GetAtt UsersTable.Arn
+        - !GetAtt WebhooksTable.Arn
+        - !Join ['', [!GetAtt ProductsTable.Arn, '/index/*']]
+        - !Join ['', [!GetAtt CategoriesTable.Arn, '/index/*']]
+        - !Join ['', [!GetAtt UsersTable.Arn, '/index/*']]
+        - !Join ['', [!GetAtt WebhooksTable.Arn, '/index/*']]
+        - 'arn:aws:dynamodb:${self:provider.region}:*:table/*'
+    - Effect: Allow
+      Action:
+        - lambda:ListFunctions
+      Resource: '*'
+    - Effect: Allow
+      Action:
+        - apigateway:GET
+      Resource: 'arn:aws:apigateway:${self:provider.region}::/restapis'
+    - Effect: Allow
+      Action:
+        - secretsmanager:GetSecretValue
+      Resource: !Ref SquareCredentialsSecret
+    - Effect: Allow
+      Action:
+        - cloudwatch:PutMetricData
+      Resource: "*"
+
+custom:
+  serverless-offline:
+    httpPort: 3001
+    noPrependStageInUrl: true
+    resourceRoutes: true
+  dynamodb:
+    stages:
+      - dev
+    start:
+      port: 8000
+      inMemory: true
+      migrate: true
+      seed: true
+  allowedHeaders:
+    - Content-Type
+    - X-Amz-Date
+    - Authorization
+    - X-Api-Key
+    - X-Amz-Security-Token
+    - X-Amz-User-Agent
+    - X-Requested-With
+  allowedMethods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allowedOrigins:
+    - '*'
+  apiGateway:
+    apiKeys:
+      - name: joylabs-api-key-${self:provider.stage}
+        description: JoyLabs API Key
+    usagePlan:
+      quota:
+        limit: 5000
+        period: DAY
+      throttle:
+        burstLimit: 50
+        rateLimit: 25
 
 functions:
   api:
@@ -33,14 +106,63 @@ functions:
       - http:
           path: /
           method: ANY
-          cors: true
+          cors:
+            origin: '*'
+            headers: ${self:custom.allowedHeaders}
+            allowCredentials: true
       - http:
           path: /{proxy+}
           method: ANY
+          cors:
+            origin: '*'
+            headers: ${self:custom.allowedHeaders}
+            allowCredentials: true
+          
+  # Add separate function for Square OAuth callback with public access
+  squareCallback:
+    handler: src/oauthHandlers.squareCallback
+    events:
+      - http:
+          path: /api/auth/square/callback
+          method: GET
+          cors:
+            origin: '*'
+            headers: ${self:custom.allowedHeaders}
+            allowCredentials: true
+            
+  # Add webhook handler for Square
+  squareWebhook:
+    handler: src/webhookHandlers.squareWebhook
+    events:
+      - http:
+          path: /api/webhooks/square
+          method: POST
           cors: true
 
 resources:
   Resources:
+    GatewayResponseDefault4XX:
+      Type: 'AWS::ApiGateway::GatewayResponse'
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'${self:custom.allowedHeaders}'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'${self:custom.allowedMethods}'"
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+          
+    GatewayResponseDefault5XX:
+      Type: 'AWS::ApiGateway::GatewayResponse'
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'${self:custom.allowedHeaders}'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'${self:custom.allowedMethods}'"
+        ResponseType: DEFAULT_5XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+          
     ProductsTable:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -90,18 +212,167 @@ resources:
                 KeyType: HASH
             Projection:
               ProjectionType: ALL
+              
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: email
+            AttributeType: S
+          - AttributeName: square_merchant_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: EmailIndex
+            KeySchema:
+              - AttributeName: email
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: SquareMerchantIndex
+            KeySchema:
+              - AttributeName: square_merchant_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+    # Add Secrets Manager for Square credentials
+    SquareCredentialsSecret:
+      Type: AWS::SecretsManager::Secret
+      Properties:
+        Name: joylabs/${self:provider.stage}/square-credentials
+        Description: Square OAuth credentials for JoyLabs Catalog
+        SecretString: '{"SQUARE_APPLICATION_ID":"sq0idp-WFTYv3An7NPv6ovGFLld1Q","SQUARE_APPLICATION_SECRET":"sq0csp-z8vgtFYXtjEbXMGW9fjSgw9KsMLzJpoc7RrCCPoLdE4","SQUARE_ENVIRONMENT":"production","SQUARE_WEBHOOK_SIGNATURE_KEY":"YOUR_WEBHOOK_SIGNATURE_KEY"}'
+
+    # Webhooks table for Square event tracking
+    WebhooksTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.WEBHOOKS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: event_type
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: EventTypeIndex
+            KeySchema:
+              - AttributeName: event_type
+                KeyType: HASH
+              - AttributeName: timestamp
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    # WebACL for API protection
+    ApiWebAcl:
+      Type: AWS::WAFv2::WebACL
+      Properties:
+        Name: joylabs-webacl-${self:provider.stage}
+        Scope: REGIONAL
+        DefaultAction:
+          Allow: {}
+        VisibilityConfig:
+          SampledRequestsEnabled: true
+          CloudWatchMetricsEnabled: true
+          MetricName: joylabs-webacl-${self:provider.stage}
+        Rules:
+          - Name: AWSManagedRulesCommonRuleSet
+            Priority: 0
+            OverrideAction:
+              None: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: AWSManagedRulesCommonRuleSet
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesCommonRuleSet
+          - Name: RateLimit
+            Priority: 1
+            Action:
+              Block: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: RateLimit
+            Statement:
+              RateBasedStatement:
+                Limit: 1000
+                AggregateKeyType: IP
+          - Name: GeoBlockHighRiskCountries
+            Priority: 2
+            Action:
+              Block: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: GeoBlockHighRiskCountries
+            Statement:
+              GeoMatchStatement:
+                CountryCodes:
+                  - CN
+                  - RU
+                  - KP
+                  - IR
+    
+    # WAF association with API Gateway
+    WebACLAssociation:
+      Type: AWS::WAFv2::WebACLAssociation
+      Properties:
+        ResourceArn: !Sub arn:aws:apigateway:${AWS::Region}::/restapis/${ApiGatewayRestApi}/stages/${self:provider.stage}
+        WebACLArn: !GetAtt ApiWebAcl.Arn
+
+    # CloudWatch Alarms for Security Monitoring
+    FailedAuthAttemptsAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: joylabs-failed-auth-attempts-${self:provider.stage}
+        AlarmDescription: Alert on high rate of failed authentication attempts
+        Namespace: JoyLabs/Security
+        MetricName: SecurityEvent_AuthFailure
+        Dimensions:
+          - Name: Environment
+            Value: ${self:provider.stage}
+        Statistic: Sum
+        Period: 300 # 5 minutes
+        EvaluationPeriods: 1
+        Threshold: 5
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        
+    FailedTokenRefreshAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: joylabs-failed-token-refresh-${self:provider.stage}
+        AlarmDescription: Alert on failed token refresh attempts
+        Namespace: JoyLabs/Security
+        MetricName: SecurityEvent_TokenRefresh
+        Dimensions:
+          - Name: Environment
+            Value: ${self:provider.stage}
+          - Name: Severity
+            Value: WARN
+        Statistic: Sum
+        Period: 300 # 5 minutes
+        EvaluationPeriods: 1
+        Threshold: 3
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
 
 plugins:
   - serverless-offline
-  - serverless-dynamodb-local
-
-custom:
-  serverless-offline:
-    httpPort: 5000
-  dynamodb:
-    stages:
-      - dev
-    start:
-      port: 8000
-      inMemory: true
-      migrate: true 
+  - serverless-dynamodb-local 

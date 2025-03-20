@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const categoriesController = require('../controllers/categoriesController');
+const categoriesController = require('../controllers/categories');
 
 /**
  * @route   GET /api/categories
@@ -36,5 +36,10 @@ router.put('/:id', categoriesController.updateCategory);
  * @access  Private
  */
 router.delete('/:id', categoriesController.deleteCategory);
+
+// Temporary route for testing
+router.get('/test', (req, res) => {
+  res.json({ message: 'Categories API is working' });
+});
 
 module.exports = router; 
