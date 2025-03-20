@@ -357,10 +357,271 @@ const oauthTestPage = (req, res) => {
   `);
 };
 
+/**
+ * OAuth debug and test tool
+ */
+const oauthDebugTool = (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>OAuth Debug Tool</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { 
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f7;
+          }
+          .card {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin: 20px 0;
+          }
+          h1, h2, h3 { color: #333; margin-top: 0; }
+          pre {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+          }
+          .code {
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+          }
+          .button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin: 5px 5px 5px 0;
+            font-size: 14px;
+          }
+          .button.red { background: #ea4335; }
+          .button.green { background: #34a853; }
+          .button.yellow { background: #fbbc05; }
+          input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            margin-bottom: 10px;
+            font-family: monospace;
+          }
+          .tool-description {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 15px;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+          }
+          table, th, td {
+            border: 1px solid #ddd;
+          }
+          th, td {
+            padding: 10px;
+            text-align: left;
+          }
+          th {
+            background-color: #f5f5f5;
+          }
+          #resultContainer {
+            display: none;
+            margin-top: 20px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>Square OAuth Debug Tool</h1>
+          <p class="tool-description">
+            This tool helps diagnose OAuth issues with Square integration.
+            It provides detailed information about the OAuth process and helps troubleshoot common problems.
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>Environment Information</h2>
+          <table>
+            <tr>
+              <th>Setting</th>
+              <th>Value</th>
+            </tr>
+            <tr>
+              <td>Node Environment</td>
+              <td>${process.env.NODE_ENV || 'not set'}</td>
+            </tr>
+            <tr>
+              <td>Square Environment</td>
+              <td>${process.env.SQUARE_ENVIRONMENT || 'not set'}</td>
+            </tr>
+            <tr>
+              <td>API Base URL</td>
+              <td>${process.env.API_BASE_URL || 'not set'}</td>
+            </tr>
+            <tr>
+              <td>Square Application ID</td>
+              <td>${process.env.SQUARE_APPLICATION_ID ? '✓ Configured' : '✗ Not configured'}</td>
+            </tr>
+            <tr>
+              <td>Session Support</td>
+              <td>${req.session ? '✓ Enabled' : '✗ Disabled'}</td>
+            </tr>
+            <tr>
+              <td>User Agent</td>
+              <td>${req.headers['user-agent'] || 'not available'}</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>Cookie Debug</h2>
+          <div class="tool-description">
+            Your current cookies:
+          </div>
+          <pre>${JSON.stringify(req.cookies, null, 2) || 'No cookies found'}</pre>
+          
+          <div class="tool-description">
+            Test cookie functionality:
+          </div>
+          <button id="setCookieBtn" class="button green">Set Test Cookie</button>
+          <button id="getCookieBtn" class="button">Check Test Cookie</button>
+          <button id="clearCookieBtn" class="button red">Clear Test Cookie</button>
+        </div>
+        
+        <div class="card">
+          <h2>OAuth Test Tools</h2>
+          
+          <div class="tool-description">
+            <strong>1. Test OAuth Initialization</strong> - Generates state and PKCE parameters
+          </div>
+          <button id="testOAuthInitBtn" class="button">Test OAuth Init</button>
+          
+          <div class="tool-description">
+            <strong>2. Test Direct Callback</strong> - Bypasses Square authorization
+          </div>
+          <a href="/api/auth/square/test-callback" class="button yellow">Simulate Callback</a>
+          
+          <div class="tool-description">
+            <strong>3. Full OAuth Flow</strong> - Complete OAuth process
+          </div>
+          <a href="/api/auth/square?state=test-state-parameter" class="button green">Start OAuth Flow</a>
+        </div>
+        
+        <div class="card">
+          <h2>Manual Callback Test</h2>
+          <div class="tool-description">
+            Simulate a callback with custom parameters:
+          </div>
+          <form id="callbackForm">
+            <label for="codeInput">Authorization Code:</label>
+            <input type="text" id="codeInput" value="test_auth_code" />
+            
+            <label for="stateInput">State Parameter:</label>
+            <input type="text" id="stateInput" value="test-state-parameter" />
+            
+            <button type="submit" class="button yellow">Send Callback</button>
+          </form>
+        </div>
+        
+        <div id="resultContainer" class="card">
+          <h2>Result</h2>
+          <div id="resultOutput" class="code"></div>
+        </div>
+
+        <script>
+          // Cookie test functions
+          document.getElementById('setCookieBtn').addEventListener('click', () => {
+            document.cookie = "oauth_test_cookie=test-value; path=/; max-age=3600";
+            alert("Test cookie set!");
+          });
+          
+          document.getElementById('getCookieBtn').addEventListener('click', () => {
+            const cookies = document.cookie.split(';')
+              .map(c => c.trim())
+              .filter(c => c.startsWith('oauth_test_cookie='));
+            
+            if (cookies.length > 0) {
+              alert("Test cookie found: " + cookies[0]);
+            } else {
+              alert("Test cookie not found!");
+            }
+          });
+          
+          document.getElementById('clearCookieBtn').addEventListener('click', () => {
+            document.cookie = "oauth_test_cookie=; path=/; max-age=0";
+            alert("Test cookie cleared!");
+          });
+          
+          // OAuth init test
+          document.getElementById('testOAuthInitBtn').addEventListener('click', async () => {
+            try {
+              const response = await fetch('/api/auth/square/mobile-init');
+              const data = await response.json();
+              
+              const resultContainer = document.getElementById('resultContainer');
+              const resultOutput = document.getElementById('resultOutput');
+              
+              resultOutput.textContent = JSON.stringify(data, null, 2);
+              resultContainer.style.display = 'block';
+              
+              // Scroll to result
+              resultContainer.scrollIntoView({ behavior: 'smooth' });
+            } catch (error) {
+              alert("Error: " + error.message);
+            }
+          });
+          
+          // Manual callback test
+          document.getElementById('callbackForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const code = document.getElementById('codeInput').value;
+            const state = document.getElementById('stateInput').value;
+            
+            if (!code || !state) {
+              alert("Please provide both code and state parameters");
+              return;
+            }
+            
+            const url = '/api/auth/square/callback?code=' + encodeURIComponent(code) + '&state=' + encodeURIComponent(state);
+            
+            try {
+              window.location.href = url;
+            } catch (error) {
+              alert("Error: " + error.message);
+            }
+          });
+        </script>
+      </body>
+    </html>
+  `);
+};
+
 // Export all controller functions
 module.exports = {
   checkHealth,
   checkDetailedHealth,
   renderTestPage,
-  oauthTestPage
+  oauthTestPage,
+  oauthDebugTool
 }; 

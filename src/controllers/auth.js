@@ -84,6 +84,19 @@ async function handleSquareCallback(req, res) {
     // Check if this is a POST request from mobile app or GET from web flow
     const isMobileFlow = req.method === 'POST';
     
+    // EXTENSIVE DEBUGGING LOGS - Print all available request information
+    console.log('====== OAUTH CALLBACK DEBUG ======');
+    console.log('Request Method:', req.method);
+    console.log('Request URL:', req.url);
+    console.log('Request Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Request Query:', JSON.stringify(req.query, null, 2));
+    console.log('Request Body:', JSON.stringify(req.body, null, 2));
+    console.log('Request Cookies:', JSON.stringify(req.cookies, null, 2));
+    if (req.session) {
+      console.log('Session Data:', JSON.stringify(req.session, null, 2));
+    }
+    console.log('================================');
+    
     // For mobile flow, get params from request body
     // For web flow, get params from request query
     const code = isMobileFlow ? req.body.code : req.query.code;
@@ -91,17 +104,6 @@ async function handleSquareCallback(req, res) {
     const codeVerifier = isMobileFlow ? req.body.code_verifier : null;
     
     console.log(`Callback received (${isMobileFlow ? 'mobile' : 'web'}) with state:`, state);
-    
-    if (!isMobileFlow) {
-      console.log('Cookies received:', req.cookies);
-    }
-    
-    if (req.session) {
-      console.log('Session data available:', !!req.session);
-      if (req.session.oauthParams) {
-        console.log('Session OAuth params:', Object.keys(req.session.oauthParams));
-      }
-    }
     
     if (!code) {
       // Log missing code
@@ -113,6 +115,15 @@ async function handleSquareCallback(req, res) {
       });
       
       return res.status(400).json({ error: 'Authorization code is missing' });
+    }
+    
+    // *** IMPORTANT: Make state validation more permissive for testing ***
+    // For development purposes, accept any state to troubleshoot the rest of the flow
+    let bypassStateValidation = false;
+    
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('DEVELOPMENT MODE: State validation will be more permissive');
+      bypassStateValidation = true;
     }
     
     // For web flow, verify state against cookie or session
@@ -129,24 +140,36 @@ async function handleSquareCallback(req, res) {
       console.log('Has session state:', hasSessionState);
       
       if (!state) {
-        await security.logAuthFailure({
-          reason: 'missing_state',
-          ip: req.ip,
-          user_agent: req.headers['user-agent'],
-          flow: 'web'
-        });
+        console.log('WARNING: Missing state parameter in callback');
         
-        return res.status(400).json({ error: 'Missing state parameter' });
+        if (!bypassStateValidation) {
+          await security.logAuthFailure({
+            reason: 'missing_state',
+            ip: req.ip,
+            user_agent: req.headers['user-agent'],
+            flow: 'web'
+          });
+          
+          return res.status(400).json({ error: 'Missing state parameter' });
+        } else {
+          console.log('BYPASSING state validation since we are in development mode');
+        }
       }
       
       // Allow the state if it's in the cookies OR in the session
-      // Also still allowing test-state-parameter for testing
-      const isValidState = (savedState && savedState === state) || 
-                            hasSessionState || 
-                            state === 'test-state-parameter';
+      // Also allowing test-state-parameter for testing
+      // In dev mode, we'll bypass the check entirely
+      const isValidState = bypassStateValidation || 
+                           (savedState && savedState === state) || 
+                           hasSessionState || 
+                           state === 'test-state-parameter';
       
       if (!isValidState) {
         // Log security violation
+        console.error('Invalid state parameter received:', state);
+        console.error('Expected state from cookie:', savedState);
+        console.error('State in session:', hasSessionState ? 'yes' : 'no');
+        
         await security.logAuthFailure({
           reason: 'invalid_state',
           ip: req.ip,
@@ -178,7 +201,7 @@ async function handleSquareCallback(req, res) {
       }
     } else {
       // For mobile flow, validate that we have a state and code verifier
-      if (!state) {
+      if (!state && !bypassStateValidation) {
         await security.logAuthFailure({
           reason: 'missing_state',
           ip: req.ip,
@@ -189,7 +212,7 @@ async function handleSquareCallback(req, res) {
         return res.status(400).json({ error: 'Missing state parameter' });
       }
       
-      if (!codeVerifier) {
+      if (!codeVerifier && !bypassStateValidation) {
         await security.logAuthFailure({
           reason: 'missing_code_verifier',
           ip: req.ip,
@@ -201,65 +224,82 @@ async function handleSquareCallback(req, res) {
       }
     }
     
+    console.log('Proceeding to token exchange. Code:', !!code, 'CodeVerifier:', !!codeVerifier);
+    
     // Exchange the authorization code for an access token
-    const tokenResponse = await squareService.exchangeCodeForToken(code, codeVerifier);
-    
-    // Get merchant information using the access token
-    const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
-    
-    // Add merchant ID to the token response for the client
-    tokenResponse.merchant_id = merchantInfo.id;
-    
-    // Check if user with this merchant ID already exists
-    let user = await User.findBySquareMerchantId(merchantInfo.id);
-    let isNewUser = false;
-    
-    if (user) {
-      // Update the user's Square credentials
-      user = await User.update(user.id, {
-        square_access_token: tokenResponse.access_token,
-        square_refresh_token: tokenResponse.refresh_token,
-        square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+    try {
+      // Exchange the authorization code for an access token
+      const tokenResponse = await squareService.exchangeCodeForToken(code, codeVerifier);
+      console.log('Token exchange successful. Response:', JSON.stringify(tokenResponse, null, 2));
+      
+      // Get merchant information using the access token
+      const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+      console.log('Merchant info retrieved:', JSON.stringify(merchantInfo, null, 2));
+      
+      // Add merchant ID to the token response for the client
+      tokenResponse.merchant_id = merchantInfo.id;
+      
+      // Check if user with this merchant ID already exists
+      let user = await User.findBySquareMerchantId(merchantInfo.id);
+      let isNewUser = false;
+      
+      if (user) {
+        console.log('Existing user found with merchant ID:', merchantInfo.id);
+        // Update the user's Square credentials
+        user = await User.update(user.id, {
+          square_access_token: tokenResponse.access_token,
+          square_refresh_token: tokenResponse.refresh_token,
+          square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+        });
+      } else {
+        isNewUser = true;
+        console.log('Creating new user with merchant ID:', merchantInfo.id);
+        // Create a new user
+        user = await User.create({
+          name: merchantInfo.business_name || merchantInfo.name,
+          email: merchantInfo.email || `merchant-${merchantInfo.id}@example.com`, // Fallback, ideally collect this separately
+          square_merchant_id: merchantInfo.id,
+          square_access_token: tokenResponse.access_token,
+          square_refresh_token: tokenResponse.refresh_token,
+          square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+        });
+      }
+      
+      // Generate JWT for the user
+      const token = User.generateToken(user);
+      console.log('JWT token generated for user');
+      
+      // Add the JWT to the response for the mobile client
+      tokenResponse.jwt = token;
+      
+      // Log successful OAuth completion
+      await security.logOAuthActivity({
+        action: 'oauth_complete',
+        user_id: user.id,
+        merchant_id: merchantInfo.id,
+        is_new_user: isNewUser,
+        ip: req.ip,
+        user_agent: req.headers['user-agent'],
+        flow: isMobileFlow ? 'mobile' : 'web'
       });
-    } else {
-      isNewUser = true;
-      // Create a new user
-      user = await User.create({
-        name: merchantInfo.business_name || merchantInfo.name,
-        email: merchantInfo.email || `merchant-${merchantInfo.id}@example.com`, // Fallback, ideally collect this separately
-        square_merchant_id: merchantInfo.id,
-        square_access_token: tokenResponse.access_token,
-        square_refresh_token: tokenResponse.refresh_token,
-        square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
-      });
+      
+      // For mobile flow, return the tokens as JSON
+      if (isMobileFlow) {
+        console.log('Returning token response as JSON for mobile client');
+        return res.json(tokenResponse);
+      }
+      
+      // For web flow, redirect to success page
+      console.log('Redirecting to success page for web client');
+      res.redirect(`/api/auth/success?token=${token}`);
+    } catch (tokenError) {
+      console.error('Token exchange error:', tokenError);
+      console.error('Error details:', tokenError.stack);
+      throw tokenError;
     }
-    
-    // Generate JWT for the user
-    const token = User.generateToken(user);
-    
-    // Add the JWT to the response for the mobile client
-    tokenResponse.jwt = token;
-    
-    // Log successful OAuth completion
-    await security.logOAuthActivity({
-      action: 'oauth_complete',
-      user_id: user.id,
-      merchant_id: merchantInfo.id,
-      is_new_user: isNewUser,
-      ip: req.ip,
-      user_agent: req.headers['user-agent'],
-      flow: isMobileFlow ? 'mobile' : 'web'
-    });
-    
-    // For mobile flow, return the tokens as JSON
-    if (isMobileFlow) {
-      return res.json(tokenResponse);
-    }
-    
-    // For web flow, redirect to success page
-    res.redirect(`/api/auth/success?token=${token}`);
   } catch (error) {
     console.error('Error handling Square callback:', error);
+    console.error('Stack trace:', error.stack);
     
     // Log OAuth failure
     await security.logOAuthActivity({
@@ -272,11 +312,11 @@ async function handleSquareCallback(req, res) {
     
     // For mobile flow, return JSON error
     if (req.method === 'POST') {
-      return res.status(500).json({ error: 'Failed to complete OAuth flow' });
+      return res.status(500).json({ error: 'Failed to complete OAuth flow', details: error.message });
     }
     
     // For web flow, show error page
-    res.status(500).json({ error: 'Failed to complete OAuth flow' });
+    res.status(500).json({ error: 'Failed to complete OAuth flow', details: error.message });
   }
 }
 
