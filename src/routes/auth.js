@@ -22,6 +22,27 @@ router.get('/square/test-callback', async (req, res) => {
     const environment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
     const clientId = process.env.SQUARE_APPLICATION_ID || 'unknown';
     
+    // Set test cookie for state validation
+    const testState = 'test-state-parameter';
+    res.cookie('square_oauth_state', testState, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 3600000 // 1 hour
+    });
+    
+    // Setup session state if we're using sessions
+    if (req.session) {
+      if (!req.session.oauthParams) {
+        req.session.oauthParams = {};
+      }
+      
+      req.session.oauthParams[testState] = {
+        codeVerifier: 'test-code-verifier',
+        createdAt: new Date().toISOString()
+      };
+    }
+    
     // Create a test response page that shows diagnostic information
     // and also provides a button to simulate the callback
     const html = `
@@ -39,6 +60,8 @@ router.get('/square/test-callback', async (req, res) => {
           .environment { display: inline-block; padding: 5px 10px; border-radius: 3px; margin-left: 10px; }
           .sandbox { background: #ffd700; color: #333; }
           .production { background: #32cd32; color: white; }
+          .warning { color: #f44336; }
+          .success { color: #4CAF50; }
         </style>
       </head>
       <body>
@@ -53,6 +76,13 @@ router.get('/square/test-callback', async (req, res) => {
           <p><strong>Environment:</strong> ${environment}</p>
           <p><strong>Application ID:</strong> ${clientId.substring(0, 6)}****${clientId.substring(clientId.length - 4)}</p>
           <p><strong>API Base URL:</strong> ${process.env.API_BASE_URL || 'Not set'}</p>
+          <p><strong class="success">✓ Test state cookie set: </strong> ${testState}</p>
+        </div>
+        
+        <div class="card">
+          <h2>Important Notes</h2>
+          <p class="warning"><strong>Important:</strong> This tool has set a required cookie in your browser called <code>square_oauth_state</code> with the value <code>${testState}</code>.</p>
+          <p>This cookie is necessary for the callback to work correctly with state validation.</p>
         </div>
         
         <div class="card">
@@ -71,22 +101,8 @@ router.get('/square/test-callback', async (req, res) => {
             const debugElement = document.getElementById('debug');
             debugElement.innerText = 'Processing callback...';
             
-            // Simulate a callback with a test code
-            fetch('/api/auth/square/callback?code=test_authorization_code&state=test-state-parameter')
-              .then(response => {
-                if (!response.ok) {
-                  return response.text().then(text => {
-                    throw new Error('Response not OK: ' + text);
-                  });
-                }
-                return response.text();
-              })
-              .then(data => {
-                debugElement.innerText = 'Success! Response:\\n' + data;
-              })
-              .catch(error => {
-                debugElement.innerText = 'Error during callback simulation:\\n' + error;
-              });
+            // Directly load the page rather than using fetch which doesn't send cookies
+            window.location.href = '/api/auth/square/callback?code=test_authorization_code&state=test-state-parameter';
           }
         </script>
       </body>

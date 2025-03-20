@@ -84,16 +84,17 @@ async function handleSquareCallback(req, res) {
     // Check if this is a POST request from mobile app or GET from web flow
     const isMobileFlow = req.method === 'POST';
     
-    // Check if this is a test callback from our test route
-    const isTestCallback = req.query.code === 'test_authorization_code' || 
-                         req.originalUrl.includes('/square/test-callback');
+    // Check if this is a test callback with our specific test parameters
+    const isTestRequest = 
+      (code === 'test_authorization_code' || req.query.code === 'test_authorization_code') && 
+      (state === 'test-state-parameter' || req.query.state === 'test-state-parameter');
     
     // EXTENSIVE DEBUGGING LOGS - Print all available request information
     console.log('====== OAUTH CALLBACK DEBUG ======');
     console.log('Request Method:', req.method);
     console.log('Request URL:', req.url);
     console.log('Original URL:', req.originalUrl);
-    console.log('Is Test Callback:', isTestCallback);
+    console.log('Is Test Callback:', isTestRequest);
     console.log('Request Headers:', JSON.stringify(req.headers, null, 2));
     console.log('Request Query:', JSON.stringify(req.query, null, 2));
     console.log('Request Body:', JSON.stringify(req.body, null, 2));
@@ -127,10 +128,16 @@ async function handleSquareCallback(req, res) {
     // For development purposes, accept any state to troubleshoot the rest of the flow
     let bypassStateValidation = false;
     
-    // Bypass for tests or in dev mode
-    if (process.env.NODE_ENV !== 'production' || isTestCallback) {
-      console.log('DEVELOPMENT MODE OR TEST CALLBACK: State validation will be more permissive');
+    // For test requests, be more permissive with state validation
+    if (isTestRequest) {
+      console.log('TEST REQUEST DETECTED: Using test parameters for OAuth flow');
       bypassStateValidation = true;
+      
+      // When using test parameters, ensure we have a code verifier for PKCE
+      if (!codeVerifier) {
+        console.log('Setting test code verifier for PKCE in test mode');
+        codeVerifier = 'test-code-verifier';
+      }
     }
     
     // For web flow, verify state against cookie or session
@@ -239,7 +246,7 @@ async function handleSquareCallback(req, res) {
       let tokenResponse;
       let merchantInfo;
       
-      if (isTestCallback || code === 'test_authorization_code') {
+      if (isTestRequest || code === 'test_authorization_code') {
         console.log('USING MOCK DATA FOR TEST CALLBACK');
         
         // Generate a fake access token that looks realistic
