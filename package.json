@@ -20,18 +20,19 @@
   "license": "MIT",
   "dependencies": {
     "aws-sdk": "^2.1499.0",
-    "express": "^4.18.2",
-    "serverless-http": "^3.2.0",
+    "axios": "^1.6.7",
+    "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
+    "crypto": "^1.0.1",
     "dotenv": "^16.3.1",
-    "uuid": "^9.0.1",
-    "morgan": "^1.10.0",
+    "express": "^4.18.2",
+    "express-session": "^1.18.1",
     "joi": "^17.11.0",
     "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "serverless-http": "^3.2.0",
     "square": "^33.0.0",
-    "axios": "^1.6.7",
-    "crypto": "^1.0.1",
-    "cookie-parser": "^1.4.6"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "jest": "^29.7.0",
@@ -40,4 +41,4 @@
     "serverless-dynamodb-local": "^0.2.40",
     "serverless-offline": "^13.3.0"
   }
-} 
+}

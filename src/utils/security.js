@@ -1,7 +1,16 @@
 const AWS = require('aws-sdk');
 
 // Initialize CloudWatch client
-const cloudwatch = new AWS.CloudWatch();
+let cloudwatch;
+if (process.env.NODE_ENV === 'production') {
+  cloudwatch = new AWS.CloudWatch({
+    region: process.env.AWS_REGION || 'us-west-1'
+  });
+}
+
+// For testing/development
+const useMockData = process.env.ENABLE_MOCK_DATA === 'true' || process.env.NODE_ENV !== 'production';
+const mockLogs = [];
 
 /**
  * Log security events to CloudWatch
@@ -77,11 +86,51 @@ const logTokenRefresh = async (details, success = true) => {
  * @param {boolean} success Whether OAuth flow was successful
  */
 const logOAuthActivity = async (details, success = true) => {
-  await logSecurityEvent('OAuthActivity', {
-    ...details,
-    success,
-    timestamp: new Date().toISOString()
-  }, success ? 'INFO' : 'WARN');
+  // Default to info level for successful events, warn for failures
+  const logLevel = success ? 'info' : 'warn';
+  
+  // Log to console first
+  console[logLevel]('OAuth Activity:', JSON.stringify(details, null, 2));
+  
+  // Store in mock logs for development
+  if (useMockData) {
+    mockLogs.push({
+      type: 'oauth_activity',
+      timestamp: new Date().toISOString(),
+      success,
+      data: details
+    });
+  }
+  
+  // In production, log to CloudWatch
+  if (cloudwatch && process.env.NODE_ENV === 'production') {
+    try {
+      const params = {
+        MetricData: [
+          {
+            MetricName: 'OAuthActivity',
+            Dimensions: [
+              {
+                Name: 'Action',
+                Value: details.action || 'unknown'
+              },
+              {
+                Name: 'Success',
+                Value: success ? 'true' : 'false'
+              }
+            ],
+            Unit: 'Count',
+            Value: 1
+          }
+        ],
+        Namespace: 'JoyLabs/Security'
+      };
+      
+      await cloudwatch.putMetricData(params).promise();
+    } catch (error) {
+      console.error('Error logging to CloudWatch:', error);
+    }
+  }
 };
 
 /**
@@ -97,10 +146,22 @@ const logTokenRevocation = async (details, success = true) => {
   }, success ? 'INFO' : 'WARN');
 };
 
+/**
+ * Get mock logs for debugging (development only)
+ */
+function getMockLogs() {
+  if (process.env.NODE_ENV === 'production') {
+    return { error: 'Not available in production' };
+  }
+  
+  return mockLogs;
+}
+
 module.exports = {
   logSecurityEvent,
   logAuthFailure,
   logTokenRefresh,
   logOAuthActivity,
-  logTokenRevocation
+  logTokenRevocation,
+  getMockLogs
 }; 

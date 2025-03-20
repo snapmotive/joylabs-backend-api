@@ -1,6 +1,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const AWS = require('aws-sdk');
+const { Client, Environment } = require('square');
 
 // AWS Secrets Manager client
 const secretsManager = new AWS.SecretsManager();
@@ -134,54 +135,70 @@ const getAuthorizationUrl = async (state, codeChallenge = null) => {
 };
 
 /**
- * Exchange OAuth code for access token with PKCE support
+ * Exchange the authorization code for an access token
  */
-const exchangeCodeForToken = async (code, codeVerifier = null) => {
-  const credentials = await getSquareCredentials();
-  
-  const baseUrl = credentials.SQUARE_ENVIRONMENT === 'production'
-    ? 'https://connect.squareup.com'
-    : 'https://connect.squareupsandbox.com';
-  
-  // Use the correct API URL (production or localhost) based on environment
-  const apiBaseUrl = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'dev'
-    ? (process.env.API_PROD_URL || process.env.API_BASE_URL)
-    : process.env.API_BASE_URL;
-  
-  const redirectUrl = `${apiBaseUrl}/api/auth/square/callback`;
-  
-  console.log('Exchange token redirect URL:', redirectUrl);
-  
+async function exchangeCodeForToken(code, codeVerifier = null) {
   try {
-    const requestBody = {
-      client_id: credentials.SQUARE_APPLICATION_ID,
-      client_secret: credentials.SQUARE_APPLICATION_SECRET,
+    console.log('Exchanging code for token...');
+    console.log('Using Square Environment:', process.env.SQUARE_ENVIRONMENT);
+    
+    const client = new Client({
+      environment: process.env.SQUARE_ENVIRONMENT === 'production' 
+        ? Environment.Production 
+        : Environment.Sandbox
+    });
+    
+    const { oAuthApi } = client;
+    
+    const request = {
+      // Provide the code in a request to the Obtain Token endpoint
       code,
-      grant_type: 'authorization_code',
-      redirect_uri: redirectUrl
+      clientId: process.env.SQUARE_APPLICATION_ID,
+      clientSecret: process.env.SQUARE_APPLICATION_SECRET,
+      grantType: 'authorization_code'
     };
     
     // Add code verifier if provided (for PKCE)
     if (codeVerifier) {
-      requestBody.code_verifier = codeVerifier;
-      console.log('Including code verifier for PKCE token exchange');
+      request.codeVerifier = codeVerifier;
     }
     
-    console.log('Exchanging code for token with Square...');
-    const response = await axios.post(`${baseUrl}/oauth2/token`, requestBody);
+    // Log the request parameters (except client secret)
+    const logSafeRequest = { ...request };
+    delete logSafeRequest.clientSecret;
+    console.log('Token Exchange Request:', JSON.stringify(logSafeRequest, null, 2));
     
-    console.log('Token exchange successful');
-    return response.data;
+    try {
+      const { result } = await oAuthApi.obtainToken(request);
+      return result;
+    } catch (apiError) {
+      console.error('Square API Error during token exchange:', apiError);
+      if (apiError.errors) {
+        console.error('API Error details:', JSON.stringify(apiError.errors, null, 2));
+      }
+      
+      // Add more context to the error message
+      let errorMessage = 'Failed to exchange code for token';
+      
+      if (apiError.errors && apiError.errors.length > 0) {
+        errorMessage += ': ' + apiError.errors.map(e => e.detail || e.message || e.code).join(', ');
+      } else if (apiError.message) {
+        errorMessage += ': ' + apiError.message;
+      }
+      
+      // Create a more detailed error object
+      const enhancedError = new Error(errorMessage);
+      enhancedError.originalError = apiError;
+      enhancedError.statusCode = apiError.statusCode || 500;
+      enhancedError.squareDetails = apiError.errors;
+      
+      throw enhancedError;
+    }
   } catch (error) {
-    console.error('Error exchanging code for token:', error.response?.data || error.message);
-    if (error.response) {
-      console.error('Status code:', error.response.status);
-      console.error('Response headers:', JSON.stringify(error.response.headers));
-      console.error('Response data:', JSON.stringify(error.response.data));
-    }
-    throw new Error('Failed to exchange code for token');
+    console.error('Error exchanging code for token:', error);
+    throw error;
   }
-};
+}
 
 /**
  * Refresh Square OAuth token
@@ -259,83 +276,48 @@ const revokeToken = async (accessToken) => {
 };
 
 /**
- * Fetch merchant info using access token
+ * Get merchant information using the access token
  */
-const getMerchantInfo = async (accessToken) => {
-  if (!accessToken) {
-    console.error('No access token provided to getMerchantInfo');
-    throw new Error('Access token is required');
-  }
-
-  console.log('Getting merchant info with access token:', accessToken.substring(0, 10) + '...');
-  
+async function getMerchantInfo(accessToken) {
   try {
-    // In production, we would use the Square SDK
-    // But for development/testing, we'll make a direct API call
-    const baseUrl = process.env.SQUARE_ENVIRONMENT === 'production' 
-      ? 'https://connect.squareup.com' 
-      : 'https://connect.squareupsandbox.com';
+    console.log('Getting merchant information...');
     
-    console.log('Using Square API URL:', baseUrl);
-    
-    // Make API call to get merchant info
-    const response = await axios.get(`${baseUrl}/v2/merchants/me`, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'Square-Version': '2023-09-25' // Use latest API version
-      }
+    const client = new Client({
+      environment: process.env.SQUARE_ENVIRONMENT === 'production' 
+        ? Environment.Production 
+        : Environment.Sandbox,
+      accessToken
     });
     
-    console.log('Merchant API response status:', response.status);
-    console.log('Merchant API response data:', JSON.stringify(response.data, null, 2));
+    const { merchantsApi } = client;
     
-    // Extract merchant data from response
-    if (response.data && response.data.merchant) {
-      return response.data.merchant;
-    } else {
-      console.error('Unexpected response format:', response.data);
-      
-      // Create a dummy merchant for development
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('Creating mock merchant data for development');
-        return {
-          id: 'DEV_' + Math.random().toString(36).substring(2, 10),
-          business_name: 'Development Test Merchant',
-          country: 'US',
-          language_code: 'en-US',
-          currency: 'USD',
-          status: 'ACTIVE',
-          main_location_id: 'mock-location'
-        };
-      } else {
-        throw new Error('Invalid merchant data received from Square API');
+    try {
+      // Retrieve the merchant's information
+      const { result } = await merchantsApi.retrieveMerchant('me');
+      console.log('Merchant info retrieved successfully');
+      return result.merchant;
+    } catch (apiError) {
+      console.error('Square API Error during merchant retrieval:', apiError);
+      if (apiError.errors) {
+        console.error('API Error details:', JSON.stringify(apiError.errors, null, 2));
       }
+      
+      // Add more context to the error message
+      let errorMessage = 'Failed to retrieve merchant information';
+      
+      if (apiError.errors && apiError.errors.length > 0) {
+        errorMessage += ': ' + apiError.errors.map(e => e.detail || e.message || e.code).join(', ');
+      } else if (apiError.message) {
+        errorMessage += ': ' + apiError.message;
+      }
+      
+      throw new Error(errorMessage);
     }
   } catch (error) {
-    console.error('Error fetching merchant info:', error.message);
-    if (error.response) {
-      console.error('Error response status:', error.response.status);
-      console.error('Error response data:', JSON.stringify(error.response.data, null, 2));
-    }
-    
-    // In development mode, provide a mock merchant
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('Creating mock merchant data after error in development');
-      return {
-        id: 'DEV_' + Math.random().toString(36).substring(2, 10),
-        business_name: 'Development Test Merchant',
-        country: 'US',
-        language_code: 'en-US',
-        currency: 'USD',
-        status: 'ACTIVE',
-        main_location_id: 'mock-location'
-      };
-    }
-    
-    throw new Error(`Failed to fetch merchant info: ${error.message}`);
+    console.error('Error getting merchant information:', error);
+    throw error;
   }
-};
+}
 
 // Export all required methods for production use
 module.exports = {

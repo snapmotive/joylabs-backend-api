@@ -13,7 +13,7 @@ provider:
     CATEGORIES_TABLE: joylabs-catalog-categories-${self:provider.stage}
     USERS_TABLE: joylabs-catalog-users-${self:provider.stage}
     WEBHOOKS_TABLE: joylabs-webhooks-${self:provider.stage}
-    JWT_SECRET: ${env:JWT_SECRET, '${ssm:/joylabs/${self:provider.stage}/jwt-secret~true, "default-secret-key-for-dev-only"}'}
+    JWT_SECRET: ${env:JWT_SECRET, 'default-secret-key-for-dev-only'}
     SQUARE_APPLICATION_ID: 'sq0idp-WFTYv3An7NPv6ovGFLld1Q'
     SQUARE_APPLICATION_SECRET: 'sq0csp-z8vgtFYXtjEbXMGW9fjSgw9KsMLzJpoc7RrCCPoLdE4'
     SQUARE_ENVIRONMENT: 'production'
