@@ -2,15 +2,98 @@ const User = require('../models/user');
 const squareService = require('../services/square');
 const security = require('../utils/security');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const AWS = require('aws-sdk');
+
+// Initialize DynamoDB client
+const dynamoDb = process.env.IS_OFFLINE === 'true'
+  ? new AWS.DynamoDB.DocumentClient({
+      region: 'localhost',
+      endpoint: 'http://localhost:8000'
+    })
+  : new AWS.DynamoDB.DocumentClient();
+
+const STATE_TTL = 5 * 60; // 5 minutes in seconds
+
+/**
+ * Store OAuth state parameter in DynamoDB
+ */
+const storeState = async (state) => {
+  const now = Math.floor(Date.now() / 1000); // Current time in seconds
+  const params = {
+    TableName: process.env.SESSIONS_TABLE,
+    Item: {
+      id: `oauth_state_${state}`,
+      state,
+      created_at: now,
+      expires: now + STATE_TTL // TTL in seconds from epoch
+    }
+  };
+
+  console.log('Storing state parameter:', {
+    state,
+    expires_in: STATE_TTL,
+    expires_at: new Date((now + STATE_TTL) * 1000).toISOString()
+  });
+
+  await dynamoDb.put(params).promise();
+};
+
+/**
+ * Validate and consume OAuth state parameter from DynamoDB
+ */
+const validateAndConsumeState = async (state) => {
+  console.log('Validating state parameter:', state);
+  
+  if (!state || typeof state !== 'string' || state.length < 32) {
+    console.error('Invalid state parameter format');
+    return false;
+  }
+
+  const params = {
+    TableName: process.env.SESSIONS_TABLE,
+    Key: {
+      id: `oauth_state_${state}`
+    }
+  };
+
+  try {
+    const result = await dynamoDb.get(params).promise();
+    
+    if (!result.Item) {
+      console.error('State parameter not found in DynamoDB');
+      return false;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    if (result.Item.expires < now) {
+      console.error('State parameter has expired', {
+        expired_at: new Date(result.Item.expires * 1000).toISOString(),
+        current_time: new Date(now * 1000).toISOString()
+      });
+      return false;
+    }
+
+    // Delete the state to prevent reuse
+    await dynamoDb.delete(params).promise();
+    console.log('State parameter validated and consumed successfully');
+    return true;
+  } catch (error) {
+    console.error('Error validating state parameter:', error);
+    return false;
+  }
+};
 
 /**
  * Start Square OAuth flow with PKCE support for mobile apps
  */
 async function startSquareOAuth(req, res) {
   try {
-    // Get or generate a state parameter (can use provided state or generate a new one)
-    const state = req.query.state || crypto.randomBytes(16).toString('hex');
-    console.log(`Starting OAuth flow with state: ${state}`);
+    const state = req.query.state || await generateStateParam();
+    console.log('Generated state parameter:', state);
+    
+    // Store state in DynamoDB
+    await storeState(state);
     
     // Log important request details for debugging
     console.log(`Request from User-Agent: ${req.headers['user-agent']}`);
@@ -27,14 +110,6 @@ async function startSquareOAuth(req, res) {
     // Get the redirect URL from configuration
     const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback';
     console.log(`Redirect URL for OAuth: ${redirectUrl}`);
-    
-    // Set a cookie with the state parameter
-    res.cookie('square_oauth_state', state, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 3600000 // 1 hour
-    });
     
     // Create the authorization URL
     console.log(`Using state parameter: ${state}`);
@@ -63,206 +138,110 @@ async function startSquareOAuth(req, res) {
  * Handle Square OAuth callback
  */
 async function handleSquareCallback(req, res) {
-  console.log('Square callback received', {
-    query: req.query,
-    cookies: req.cookies,
-    headers: {
-      host: req.headers.host,
-      origin: req.headers.origin,
-      referer: req.headers.referer
-    }
+  console.log('Handling Square OAuth callback');
+  console.log('Query parameters:', req.query);
+  console.log('Headers:', {
+    origin: req.headers.origin,
+    referer: req.headers.referer,
+    'user-agent': req.headers['user-agent']
   });
   
+  const { code, state } = req.query;
+  
+  if (!code || !state) {
+    console.error('Missing required parameters:', { code: !!code, state: !!state });
+    return res.status(400).json({ 
+      error: 'Missing required parameters',
+      details: {
+        code: !code ? 'Missing authorization code' : undefined,
+        state: !state ? 'Missing state parameter' : undefined
+      }
+    });
+  }
+  
   try {
-    // Get code and state from query parameters
-    const { code, state: receivedState } = req.query;
-
-    // Get stored state token and code verifier from cookies
-    const expectedState = req.cookies.square_oauth_state;
-    const codeVerifier = req.cookies.square_oauth_code_verifier;
-    
-    console.log(`Code received: ${code ? '✓' : '✗'}`);
-    console.log(`State parameter: ${receivedState}`);
-    console.log(`Expected state: ${expectedState}`);
-    console.log(`Code verifier: ${codeVerifier ? '✓' : '✗'}`);
-    
-    // Clean up cookies regardless of outcome
-    res.clearCookie('square_oauth_state');
-    res.clearCookie('square_oauth_code_verifier');
-    
-    // Skip state validation for test_authorization_code in any environment
-    const isTestMode = code === 'test_authorization_code';
-    
-    // Validate state parameter to prevent CSRF (unless in test mode)
-    if (!isTestMode && (!receivedState || !expectedState || receivedState !== expectedState)) {
-      console.error('State validation failed:', { received: receivedState, expected: expectedState });
-      return res.status(400).json({ error: 'Invalid state parameter' });
+    // Validate state parameter
+    console.log('Validating state parameter:', state);
+    const isValidState = await validateAndConsumeState(state);
+    if (!isValidState) {
+      console.error('Invalid state parameter:', state);
+      return res.status(400).json({ 
+        error: 'Invalid state parameter',
+        details: 'The state parameter is invalid, expired, or has already been used'
+      });
     }
     
-    // If no code was received, handle as an error or cancellation
-    if (!code) {
-      console.error('No authorization code received');
-      return res.status(400).json({ error: 'Authorization code missing' });
-    }
+    console.log('State parameter validated successfully');
     
-    console.log('Preparing to exchange code for token', {
-      code: code === 'test_authorization_code' ? 'test_authorization_code' : '***',
-      codeVerifier: codeVerifier ? '***' : 'not provided',
-      environment: process.env.SQUARE_ENVIRONMENT,
-      redirectUrl: process.env.SQUARE_REDIRECT_URL
+    // Exchange code for token
+    console.log('Exchanging authorization code for token');
+    const tokenResponse = await squareService.exchangeCodeForToken(code);
+    console.log('Token exchange successful');
+    
+    // Get merchant information
+    console.log('Getting merchant information');
+    const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+    console.log('Merchant info retrieved:', {
+      business_name: merchantInfo.businessName,
+      merchant_id: tokenResponse.merchant_id
     });
     
-    // Check if redirect URL in env matches the current host
-    const currentHost = req.headers.host;
-    const configuredRedirectUrl = process.env.SQUARE_REDIRECT_URL;
+    // Find or create user
+    console.log('Finding or creating user');
+    const userId = `user-${tokenResponse.merchant_id}`;
+    let user = await User.findBySquareMerchantId(tokenResponse.merchant_id);
     
-    if (configuredRedirectUrl && !isTestMode) {
-      try {
-        const configuredHost = new URL(configuredRedirectUrl).host;
-        if (currentHost !== configuredHost) {
-          console.warn(`⚠️ Potential redirect mismatch - Current host: ${currentHost}, configured redirect URL host: ${configuredHost}`);
-        }
-      } catch (e) {
-        console.error('Error parsing redirect URL:', e.message);
-      }
-    }
-    
-    try {
-      // Exchange the authorization code for an access token
-      const tokenData = await squareService.exchangeCodeForToken(code, codeVerifier);
-      console.log('Token exchange successful', {
-        merchantId: tokenData.merchant_id ? 
-          (tokenData.merchant_id.startsWith('TEST_') ? tokenData.merchant_id : tokenData.merchant_id.substring(0, 10) + '...') 
-          : 'missing',
-        hasAccessToken: !!tokenData.access_token,
-        hasRefreshToken: !!tokenData.refresh_token
+    if (!user) {
+      console.log('Creating new user for merchant:', tokenResponse.merchant_id);
+      user = await User.create({
+        id: userId,
+        name: merchantInfo.businessName || 'Square Merchant',
+        email: merchantInfo.email || `${tokenResponse.merchant_id}@example.com`,
+        square_merchant_id: tokenResponse.merchant_id
       });
-      
-      if (!tokenData || !tokenData.merchant_id) {
-        console.error('No merchant ID received in token response', tokenData);
-        return res.status(500).json({ error: 'Failed to complete OAuth flow - missing merchant ID' });
-      }
-      
-      const merchantId = tokenData.merchant_id;
-      console.log(`Merchant ID: ${merchantId}`);
-      
-      // Find or create user by merchant ID
-      console.log('Looking up user by merchant ID', merchantId);
-      let user;
-      try {
-        user = await User.findBySquareMerchantId(merchantId);
-        console.log('User lookup result:', user ? 'Found' : 'Not found');
-      } catch (error) {
-        console.error('Error finding user:', error);
-        return res.status(500).json({ 
-          error: 'Failed to complete OAuth flow - user lookup error',
-          details: error.message
-        });
-      }
-      
-      if (!user) {
-        console.log('User not found, creating new user for merchant:', merchantId);
-        
-        // Get merchant information from Square
-        let merchantInfo;
-        try {
-          merchantInfo = await squareService.getMerchantInfo(tokenData.access_token);
-          console.log('Merchant info received:', merchantInfo);
-        } catch (error) {
-          console.error('Error getting merchant info:', error);
-          merchantInfo = { name: 'Square Merchant', email: 'unknown@example.com' };
-        }
-        
-        // Create new user
-        try {
-          user = await User.create({
-            square_merchant_id: merchantId,
-            name: merchantInfo.name || 'Square Merchant', 
-            email: merchantInfo.email || 'unknown@example.com',
-            square_access_token: tokenData.access_token,
-            square_refresh_token: tokenData.refresh_token,
-            square_token_expires_at: tokenData.expires_at
-          });
-          
-          console.log('New user created:', user.id);
-        } catch (error) {
-          console.error('Error creating user:', error);
-          return res.status(500).json({ 
-            error: 'Failed to complete OAuth flow - user creation error',
-            details: error.message
-          });
-        }
-      } else {
-        console.log('Updating existing user:', user.id);
-        
-        // Update existing user's tokens
-        try {
-          user = await User.update(user.id, {
-            square_access_token: tokenData.access_token,
-            square_refresh_token: tokenData.refresh_token,
-            square_token_expires_at: tokenData.expires_at,
-            updated_at: new Date().toISOString()
-          });
-          
-          console.log('User updated with new tokens');
-        } catch (error) {
-          console.error('Error updating user:', error);
-          return res.status(500).json({ 
-            error: 'Failed to complete OAuth flow - user update error',
-            details: error.message
-          });
-        }
-      }
-      
-      // Generate JWT token
-      console.log('Generating JWT token for user', user.id);
-      try {
-        const jwtToken = generateToken(user);
-        console.log('JWT token generated');
-        
-        // Determine redirect URL
-        const successUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-        const redirectUrl = `${successUrl}?token=${encodeURIComponent(jwtToken)}`;
-        
-        console.log(`Redirecting to: ${redirectUrl.substring(0, redirectUrl.indexOf('?') + 20)}...`);
-        return res.redirect(302, redirectUrl);
-      } catch (error) {
-        console.error('Error generating JWT:', error);
-        return res.status(500).json({ 
-          error: 'Failed to complete OAuth flow - authentication error',
-          details: error.message
-        });
-      }
-    } catch (error) {
-      console.error('Error exchanging code for token:', error);
-      if (error.response) {
-        console.error('Response data:', error.response.data);
-      }
-      if (error.request) {
-        console.error('Request details:', {
-          method: error.request.method,
-          url: error.request.url,
-          headers: error.request.headers
-        });
-      }
-      throw error; // Re-throw to be handled by outer catch
+      console.log('New user created:', user.id);
+    } else {
+      console.log('Found existing user:', user.id);
     }
     
+    // Update user with new tokens
+    console.log('Updating user with new tokens');
+    await User.update(user.id, {
+      square_access_token: tokenResponse.access_token,
+      square_refresh_token: tokenResponse.refresh_token,
+      square_token_expires_at: tokenResponse.expires_at
+    });
+    console.log('User tokens updated successfully');
+    
+    // Generate JWT token
+    const token = jwt.sign({
+      sub: user.id,
+      name: user.name,
+      email: user.email,
+      merchant_id: tokenResponse.merchant_id
+    }, process.env.JWT_SECRET, {
+      expiresIn: '7d'
+    });
+    
+    // Redirect to success page with token
+    const redirectUrl = `${process.env.API_BASE_URL}/auth/success?token=${token}`;
+    console.log('Redirecting to success page:', redirectUrl);
+    res.redirect(redirectUrl);
   } catch (error) {
-    console.error('Error completing Square OAuth:', error);
+    console.error('Error in Square callback:', error);
+    console.error('Stack trace:', error.stack);
     
-    // Detailed error message for debugging
-    if (process.env.NODE_ENV !== 'production') {
-      return res.status(500).json({ 
-        error: 'Failed to complete OAuth flow',
-        details: error.message,
-        stack: error.stack,
-        squareEnv: process.env.SQUARE_ENVIRONMENT,
-        redirectUrl: process.env.SQUARE_REDIRECT_URL
-      });
-    }
+    // Determine if it's a Square API error
+    const isSquareError = error.response?.data?.errors;
+    const errorMessage = isSquareError 
+      ? error.response.data.errors[0].detail
+      : error.message;
     
-    return res.status(500).json({ error: 'Failed to complete OAuth flow' });
+    res.status(500).json({
+      error: 'Failed to complete OAuth flow',
+      details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
+      type: isSquareError ? 'square_api_error' : 'internal_error'
+    });
   }
 }
 

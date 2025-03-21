@@ -26,34 +26,74 @@ const getSquareCredentials = async () => {
   
   try {
     // If running locally or environment variables are set, use them
-    if (process.env.IS_OFFLINE || process.env.SQUARE_APPLICATION_ID) {
+    if (process.env.IS_OFFLINE || process.env.NODE_ENV === 'development') {
       console.log('Using local environment variables for Square credentials');
-      console.log(`Application ID: ${process.env.SQUARE_APPLICATION_ID}`);
-      console.log(`Environment: ${process.env.SQUARE_ENVIRONMENT}`);
       
       squareCredentials = {
-        SQUARE_APPLICATION_ID: process.env.SQUARE_APPLICATION_ID,
-        SQUARE_APPLICATION_SECRET: process.env.SQUARE_APPLICATION_SECRET,
-        SQUARE_ENVIRONMENT: process.env.SQUARE_ENVIRONMENT || 'sandbox'
+        applicationId: process.env.SQUARE_APPLICATION_ID,
+        applicationSecret: process.env.SQUARE_APPLICATION_SECRET,
+        environment: process.env.SQUARE_ENVIRONMENT || 'sandbox'
       };
       
       console.log('Loaded credentials:', {
-        environment: squareCredentials.SQUARE_ENVIRONMENT,
-        applicationId: squareCredentials.SQUARE_APPLICATION_ID
+        environment: squareCredentials.environment,
+        applicationId: squareCredentials.applicationId
       });
       
       return squareCredentials;
     }
     
     // Otherwise fetch from Secrets Manager
-    const secretId = process.env.SQUARE_SECRETS_ARN;
+    const secretId = process.env.SQUARE_CREDENTIALS_SECRET;
+    if (!secretId) {
+      throw new Error('SQUARE_CREDENTIALS_SECRET environment variable is not set');
+    }
+
+    console.log('Fetching Square credentials from Secrets Manager with secret ID:', secretId);
     const data = await secretsManager.getSecretValue({ SecretId: secretId }).promise();
     
-    if ('SecretString' in data) {
-      squareCredentials = JSON.parse(data.SecretString);
+    if (!data.SecretString) {
+      throw new Error('No SecretString found in AWS Secrets Manager response');
+    }
+
+    let secretData;
+    try {
+      secretData = JSON.parse(data.SecretString);
+      console.log('Successfully parsed secret data with keys:', Object.keys(secretData));
+    } catch (parseError) {
+      console.error('Failed to parse secret data:', parseError);
+      throw new Error('Failed to parse secret data from AWS Secrets Manager');
+    }
+    
+    // Log the structure of the secret (without exposing values)
+    console.log('Secret data structure:', {
+      hasApplicationId: !!secretData.applicationId || !!secretData.SQUARE_APPLICATION_ID,
+      hasApplicationSecret: !!secretData.applicationSecret || !!secretData.SQUARE_APPLICATION_SECRET,
+      availableKeys: Object.keys(secretData)
+    });
+    
+    // Try different possible key names
+    const applicationId = secretData.applicationId || secretData.SQUARE_APPLICATION_ID;
+    const applicationSecret = secretData.applicationSecret || secretData.SQUARE_APPLICATION_SECRET;
+    
+    if (!applicationId || !applicationSecret) {
+      throw new Error(`Invalid secret format: missing required fields. Available keys: ${Object.keys(secretData).join(', ')}`);
+    }
+
+    squareCredentials = {
+      applicationId,
+      applicationSecret,
+      environment: process.env.SQUARE_ENVIRONMENT || 'production'
+    };
+    
+    console.log('Successfully loaded credentials from Secrets Manager with application ID:', squareCredentials.applicationId);
+    
+    // Validate the credentials format
+    if (squareCredentials.applicationId.startsWith('sq0idp-') && 
+        squareCredentials.applicationSecret.length > 0) {
       return squareCredentials;
     } else {
-      throw new Error('Secret value is binary - not supported');
+      throw new Error('Invalid credential format. Application ID should start with sq0idp-');
     }
   } catch (error) {
     console.error('Error fetching Square credentials:', error);
@@ -64,46 +104,26 @@ const getSquareCredentials = async () => {
 /**
  * Get a configured Square API client
  */
-function getSquareClient(accessToken = null) {
-  console.log('Creating Square client with environment:', process.env.SQUARE_ENVIRONMENT);
-  
-  // Always use production unless explicitly set to sandbox
-  const environment = process.env.SQUARE_ENVIRONMENT !== 'sandbox' 
-    ? Environment.Production 
-    : Environment.Sandbox;
-  
-  console.log('Using Square environment:', environment);
-  
-  // Create client configuration
-  const clientConfig = {
-    environment,
-    userAgentDetail: 'JoyLabs API Server'
-  };
-  
-  // If access token is provided, use it for this client
-  if (accessToken) {
-    console.log('Using provided access token for Square client');
-    clientConfig.accessToken = accessToken;
-  }
-  
-  // Create the Square client
-  const client = new Client(clientConfig);
-  
-  // Log client configuration (excluding sensitive data)
-  console.log('Square client configuration:', {
-    environment: clientConfig.environment,
-    userAgentDetail: clientConfig.userAgentDetail,
-    hasAccessToken: !!clientConfig.accessToken
+const getSquareClient = (accessToken = null) => {
+  const environment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
+  const client = new Client({
+    accessToken: accessToken || process.env.SQUARE_ACCESS_TOKEN,
+    environment: environment,
+    userAgentDetail: 'JoyLabs Backend API'
   });
   
+  console.log('Created Square client with environment:', environment);
   return client;
-}
+};
 
 /**
  * Generate a secure random state parameter for OAuth
  */
 const generateStateParam = () => {
-  return crypto.randomBytes(16).toString('hex');
+  // Generate a cryptographically secure random string
+  const state = crypto.randomBytes(32).toString('hex');
+  console.log('Generated OAuth state parameter:', state);
+  return state;
 };
 
 /**
@@ -137,13 +157,12 @@ function generateRandomString(length = 32) {
 }
 
 const getRedirectUrl = () => {
-  // For local development or sandbox mode
-  if (process.env.IS_OFFLINE || process.env.NODE_ENV === 'development' || process.env.SQUARE_ENVIRONMENT === 'sandbox') {
-    return 'http://localhost:3001/api/auth/square/callback';
+  // In production, always use the API Gateway URL
+  if (process.env.SQUARE_ENVIRONMENT === 'production') {
+    return `https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback`;
   }
-  
-  // For production - always use AWS URL
-  return 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback';
+  // For other environments, use the configured redirect URL
+  return process.env.SQUARE_REDIRECT_URL;
 };
 
 /**
@@ -151,127 +170,134 @@ const getRedirectUrl = () => {
  */
 const generateOAuthUrl = async (state) => {
   const credentials = await getSquareCredentials();
-  const applicationId = credentials.applicationId || process.env.SQUARE_APPLICATION_ID;
+  const applicationId = credentials.applicationId;
   
   if (!applicationId) {
     throw new Error('Square application ID not configured');
   }
 
-  // Log the application ID being used
+  console.log('Generating OAuth URL with state:', state);
   console.log('Using application ID:', applicationId);
   console.log('Environment:', process.env.SQUARE_ENVIRONMENT);
+  
+  const redirectUrl = getRedirectUrl();
+  console.log('Redirect URL:', redirectUrl);
+  
+  // Validate redirect URL
+  try {
+    new URL(redirectUrl);
+  } catch (error) {
+    throw new Error('Invalid redirect URL: ' + redirectUrl);
+  }
   
   const params = new URLSearchParams({
     client_id: applicationId,
     response_type: 'code',
     scope: 'MERCHANT_PROFILE_READ',
-    redirect_uri: getRedirectUrl(),
+    redirect_uri: redirectUrl,
     state: state
   });
 
-  // Use connect.squareup.com for production, squareup.com for sandbox
-  const baseUrl = process.env.SQUARE_ENVIRONMENT === 'production' 
-    ? 'https://connect.squareup.com/oauth2/authorize'
-    : 'https://connect.squareup.com/oauth2/authorize';
-
+  // Always use production URL since we're in production mode
+  const baseUrl = 'https://connect.squareup.com/oauth2/authorize';
   const url = `${baseUrl}?${params.toString()}`;
-  console.log('Generated OAuth URL:', url);
   
+  console.log('Generated full OAuth URL:', url);
   return url;
 };
 
 /**
  * Exchange authorization code for OAuth token
  */
-async function exchangeCodeForToken(code, code_verifier = null) {
+const exchangeCodeForToken = async (code) => {
   console.log('Exchanging authorization code for token');
-  console.log(`Using Square Environment: ${process.env.SQUARE_ENVIRONMENT}`);
+  console.log('Using Square Environment:', process.env.SQUARE_ENVIRONMENT);
   
-  // Special handling for test code - create mock token regardless of environment
-  if (code === 'test_authorization_code') {
+  // For test codes in development, return mock response
+  if (code === 'test_authorization_code' && process.env.NODE_ENV !== 'production') {
     console.log('Using test authorization code with mock response');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30); // Add 30 days
-    
     return {
-      merchant_id: 'TEST_MERCHANT_123',
       access_token: 'TEST_ACCESS_TOKEN_123',
       refresh_token: 'TEST_REFRESH_TOKEN_123',
-      expires_at: expiresAt.toISOString() // 30 days from now
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      merchant_id: 'TEST_MERCHANT_123'
     };
   }
   
+  const credentials = await getSquareCredentials();
+  
+  // Validate credentials format
+  if (!credentials.applicationId?.startsWith('sq0idp-')) {
+    throw new Error('Invalid application ID format');
+  }
+  
+  if (!credentials.applicationSecret || credentials.applicationSecret === 'PLACEHOLDER') {
+    throw new Error('Invalid application secret');
+  }
+  
+  console.log('Got valid credentials with application ID:', credentials.applicationId);
+  
+  const baseUrl = 'https://connect.squareup.com';
+  const redirectUrl = getRedirectUrl();
+  
   try {
-    console.log('Creating OAuth instance');
-    console.log(`Application ID: ${process.env.SQUARE_APPLICATION_ID}`);
-    console.log(`Application Secret: ${process.env.SQUARE_APPLICATION_SECRET ? '******' : 'NOT SET'}`);
-    console.log(`Environment: ${process.env.SQUARE_ENVIRONMENT}`);
-    console.log(`Redirect URL: ${getRedirectUrl()}`);
+    console.log('Making token exchange request to Square');
+    console.log('Using redirect URI:', redirectUrl);
     
-    // Get Square client
-    const client = getSquareClient();
-    
-    // Construct the token request
-    const tokenRequest = {
-      clientId: process.env.SQUARE_APPLICATION_ID,
-      clientSecret: process.env.SQUARE_APPLICATION_SECRET,
-      code,
-      grantType: 'authorization_code',
-      redirectUri: getRedirectUrl()
+    const requestBody = {
+      client_id: credentials.applicationId,
+      client_secret: credentials.applicationSecret,
+      code: code,
+      redirect_uri: redirectUrl,
+      grant_type: 'authorization_code'
     };
     
-    // Add code verifier for PKCE if available
-    if (code_verifier) {
-      console.log('Using PKCE code verifier');
-      tokenRequest.codeVerifier = code_verifier;
+    // Validate request body
+    if (Object.values(requestBody).some(value => !value)) {
+      const missingFields = Object.entries(requestBody)
+        .filter(([_, value]) => !value)
+        .map(([key]) => key);
+      throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
     }
     
-    // Log request details (excluding sensitive info)
-    const logSafeRequest = { ...tokenRequest };
-    delete logSafeRequest.clientSecret;
-    console.log('Token Exchange Request:', JSON.stringify(logSafeRequest, null, 2));
+    // Log request (excluding secret)
+    console.log('Request body:', {
+      ...requestBody,
+      client_secret: '[REDACTED]'
+    });
     
-    // Make the token request
-    const response = await client.oAuthApi.obtainToken(tokenRequest);
+    const response = await axios.post(`${baseUrl}/oauth2/token`, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Square-Version': '2023-12-13'
+      }
+    });
     
-    if (response.statusCode !== 200) {
-      console.error('Error obtaining token:', response.body);
-      throw new Error(`Failed to exchange authorization code: ${response.body?.errors?.[0]?.detail || 'Unknown error'}`);
+    if (!response.data?.access_token) {
+      throw new Error('Invalid response from Square: missing access_token');
     }
     
-    console.log('Access token obtained successfully');
-    const data = response.result;
-    
-    // Calculate expires_at from expires_in
-    const expiresAt = new Date();
-    expiresAt.setSeconds(expiresAt.getSeconds() + data.expiresIn);
+    console.log('Successfully exchanged code for token');
     
     return {
-      merchant_id: data.merchantId,
-      access_token: data.accessToken,
-      refresh_token: data.refreshToken,
-      expires_at: expiresAt.toISOString()
+      access_token: response.data.access_token,
+      refresh_token: response.data.refresh_token,
+      expires_at: response.data.expires_at,
+      merchant_id: response.data.merchant_id
     };
-    
   } catch (error) {
-    console.error('Error exchanging code for token:', error);
-    
-    // Extract detailed error information
-    const statusCode = error.statusCode || 500;
-    const errorDetails = error.errors || [];
-    
-    const errorMessage = `Failed to exchange code for token: ${errorDetails[0]?.detail || error.message}`;
-    console.error('API Error details:', JSON.stringify(errorDetails, null, 2));
-    
-    // Rethrow with better formatting
-    const formattedError = new Error(errorMessage);
-    formattedError.originalError = error;
-    formattedError.statusCode = statusCode;
-    formattedError.squareDetails = errorDetails;
-    
-    throw formattedError;
+    if (error.response?.data) {
+      console.error('Square API Error:', {
+        status: error.response.status,
+        data: error.response.data,
+        headers: error.response.headers
+      });
+    } else {
+      console.error('Error exchanging code for token:', error);
+    }
+    throw error;
   }
-}
+};
 
 /**
  * Refresh Square OAuth token
@@ -279,14 +305,14 @@ async function exchangeCodeForToken(code, code_verifier = null) {
 async function refreshToken(refreshToken) {
   const credentials = await getSquareCredentials();
   
-  const baseUrl = credentials.SQUARE_ENVIRONMENT === 'production'
+  const baseUrl = credentials.environment === 'production'
     ? 'https://connect.squareup.com'
     : 'https://connect.squareupsandbox.com';
   
   try {
     const response = await axios.post(`${baseUrl}/oauth2/token`, {
-      client_id: credentials.SQUARE_APPLICATION_ID,
-      client_secret: credentials.SQUARE_APPLICATION_SECRET,
+      client_id: credentials.applicationId,
+      client_secret: credentials.applicationSecret,
       refresh_token: refreshToken,
       grant_type: 'refresh_token'
     });
@@ -330,14 +356,14 @@ async function refreshToken(refreshToken) {
 async function revokeToken(accessToken) {
   const credentials = await getSquareCredentials();
   
-  const baseUrl = credentials.SQUARE_ENVIRONMENT === 'production'
+  const baseUrl = credentials.environment === 'production'
     ? 'https://connect.squareup.com'
     : 'https://connect.squareupsandbox.com';
 
   try {
     await axios.post(`${baseUrl}/oauth2/revoke`, {
-      client_id: credentials.SQUARE_APPLICATION_ID,
-      client_secret: credentials.SQUARE_APPLICATION_SECRET,
+      client_id: credentials.applicationId,
+      client_secret: credentials.applicationSecret,
       access_token: accessToken
     });
     
@@ -349,50 +375,63 @@ async function revokeToken(accessToken) {
 }
 
 /**
- * Get merchant information using the access token
+ * Test Square connection and get merchant information
  */
-async function getMerchantInfo(accessToken) {
+const testSquareConnection = async (accessToken) => {
+  console.log('Testing Square connection');
+  try {
+    const response = await fetch('https://connect.squareup.com/v2/merchants/me', {
+      method: 'GET',
+      headers: {
+        'Square-Version': '2023-12-13',
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const data = await response.json();
+    
+    if (response.ok) {
+      console.log('Connection successful!');
+      console.log('Merchant info:', {
+        id: data.merchant.id,
+        business_name: data.merchant.business_name,
+        country: data.merchant.country,
+        language_code: data.merchant.language_code
+      });
+      return {
+        success: true,
+        merchant: data.merchant
+      };
+    } else {
+      console.error('Connection failed:', data.errors);
+      return {
+        success: false,
+        error: data.errors
+      };
+    }
+  } catch (error) {
+    console.error('Connection test error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+
+/**
+ * Get merchant information from Square
+ */
+const getMerchantInfo = async (accessToken) => {
   console.log('Getting merchant information from Square');
   
-  // If this is a test token, return mock data
-  if (accessToken.startsWith('TEST_')) {
-    console.log('Using mock merchant info for test token');
-    return {
-      id: 'TEST_MERCHANT_123',
-      name: 'Test Square Merchant',
-      email: 'test@example.com',
-      country: 'US',
-      language: 'en-US'
-    };
+  const result = await testSquareConnection(accessToken);
+  if (!result.success) {
+    throw new Error('Failed to get merchant information');
   }
   
-  try {
-    // Create client instance with the provided token
-    const client = getSquareClient();
-    client.customersApi.configuration.accessToken = accessToken;
-    
-    // Get merchant info from locations API
-    const response = await client.locationsApi.listLocations();
-    
-    if (response.statusCode !== 200) {
-      console.error('Error getting merchant info:', response.body);
-      throw new Error('Failed to get merchant information');
-    }
-    
-    const mainLocation = response.result.locations[0];
-    
-    return {
-      id: mainLocation.merchantId || 'unknown',
-      name: mainLocation.businessName || mainLocation.name || 'Unknown Business',
-      email: mainLocation.businessEmail || null,
-      country: mainLocation.country || 'US',
-      language: mainLocation.languageCode || 'en-US'
-    };
-  } catch (error) {
-    console.error('Error getting merchant info:', error);
-    throw error;
-  }
-}
+  return result.merchant;
+};
 
 /**
  * Create a mock token response for testing
@@ -449,5 +488,6 @@ module.exports = {
   generateCodeChallenge,
   generateRandomString,
   createMockTokenResponse,
-  createMockMerchantInfo
+  createMockMerchantInfo,
+  testSquareConnection
 };

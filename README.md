@@ -50,12 +50,15 @@ cd joylabs-backend
 npm install
 ```
 
-3. Create a `.env` file (you can copy from `.env.example`):
+3. Set up environment variables securely:
 ```bash
-cp .env.example .env
+npm run setup-env
 ```
 
-4. Update the `.env` file with your settings.
+This will:
+- Create a `.env.template` file with placeholder values
+- Generate a `.env.local` file with a secure random JWT secret
+- Provide instructions for filling in your Square credentials
 
 ## Square App Setup
 
@@ -70,12 +73,7 @@ cp .env.example .env
      - Orders API (Read/Write)
      - Inventory API (Read/Write)
 
-4. Copy the Application ID and Application Secret to your `.env` file:
-```
-SQUARE_APPLICATION_ID=your-app-id
-SQUARE_APPLICATION_SECRET=your-app-secret
-SQUARE_ENVIRONMENT=sandbox  # Use 'production' for live mode
-```
+4. Update your `.env.local` file with your application credentials (NEVER commit this file)
 
 ## Running Locally
 
@@ -90,19 +88,24 @@ npm run dev
 ```
 
 This will start:
-- API server on port 5000
+- API server on port 3001
 - Local DynamoDB on port 8000
 
-3. Visit the test page at http://localhost:5000/test to verify your setup
+3. Visit the test page at http://localhost:3001/api/auth/square/test to verify your setup
 
 ## AWS Deployment
 
-1. Make sure you have AWS credentials configured:
+1. Set up your secrets in AWS Secrets Manager:
+```bash
+node scripts/setup-aws-secrets.js
+```
+
+2. Make sure you have AWS credentials configured:
 ```bash
 aws configure
 ```
 
-2. Deploy to AWS:
+3. Deploy to AWS:
 ```bash
 npm run deploy
 ```
@@ -112,7 +115,7 @@ For production deployment:
 npm run deploy:prod
 ```
 
-3. Update your Square application settings with the new API Gateway URL:
+4. Update your Square application settings with the new API Gateway URL:
    - OAuth Redirect URL: `https://your-api-id.execute-api.region.amazonaws.com/dev/api/auth/square/callback`
 
 ## DynamoDB Structure

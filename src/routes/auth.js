@@ -10,90 +10,79 @@ const jwt = require('jsonwebtoken');
 
 // Square OAuth routes for web
 router.get('/square', async (req, res) => {
+  console.log('Starting Square OAuth flow');
+  
   try {
-    console.log('Starting Square OAuth flow');
-    console.log('Environment:', process.env.SQUARE_ENVIRONMENT);
-    console.log('Application ID:', process.env.SQUARE_APPLICATION_ID ? 'Set' : 'Not Set');
+    // Generate a secure state parameter
+    const state = generateStateParam();
+    console.log('Generated state parameter:', state);
     
-    // For sandbox testing, bypass Square's login page
-    if (process.env.SQUARE_ENVIRONMENT === 'sandbox') {
-      console.log('Using sandbox mode - bypassing Square login');
-      // Redirect directly to callback with test code
-      const state = generateStateParam();
-      res.cookie('square_oauth_state', state, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 3600000 // 1 hour
-      });
-      
-      const callbackUrl = new URL('/api/auth/square/callback', `http://${req.headers.host}`);
-      callbackUrl.searchParams.set('code', 'test_authorization_code');
-      callbackUrl.searchParams.set('state', state);
-      
-      return res.redirect(callbackUrl.toString());
+    // Store state in memory for validation
+    if (!global.oauthStates) {
+      global.oauthStates = new Map();
     }
     
-    // Generate secure state parameter
-    const state = generateStateParam();
+    // Clean up old states (older than 5 minutes)
+    const now = Date.now();
+    for (const [key, value] of global.oauthStates.entries()) {
+      if (now - value.timestamp > 5 * 60 * 1000) {
+        global.oauthStates.delete(key);
+      }
+    }
     
-    // Store state in cookie to verify when callback happens
-    res.cookie('square_oauth_state', state, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 3600000 // 1 hour
+    // Store new state with timestamp
+    global.oauthStates.set(state, {
+      timestamp: now,
+      used: false
     });
     
-    // Generate authorization URL - no PKCE to avoid CSP issues
+    // Generate OAuth URL with the secure state
     const url = await generateOAuthUrl(state);
     console.log('Redirecting to Square OAuth URL:', url);
-    
-    // Redirect to Square's OAuth page
     res.redirect(url);
   } catch (error) {
-    console.error('Error initiating OAuth flow:', error);
-    res.status(500).json({ 
-      error: 'Failed to initiate OAuth flow',
-      details: error.message,
-      env: process.env.NODE_ENV === 'development' ? {
-        SQUARE_ENVIRONMENT: process.env.SQUARE_ENVIRONMENT,
-        REDIRECT_URL: process.env.SQUARE_REDIRECT_URL
-      } : undefined
-    });
+    console.error('Error generating OAuth URL:', error);
+    res.status(500).json({ error: 'Failed to start OAuth flow' });
   }
 });
 
 // Handle callback from Square
 router.get('/square/callback', async (req, res) => {
+  console.log('Received OAuth callback');
+  console.log('Query parameters:', req.query);
+  console.log('Headers:', req.headers);
+  
+  const { code, state } = req.query;
+  
+  console.log('Received state:', state);
+  console.log('All stored states:', [...(global.oauthStates?.keys() || [])]);
+  
+  // Validate state parameter
+  if (!state) {
+    console.error('Missing state parameter');
+    return res.status(400).json({ error: 'Missing state parameter' });
+  }
+  
+  // Validate against stored state
+  const storedState = global.oauthStates?.get(state);
+  if (!storedState) {
+    console.error('Invalid state parameter. State not found in storage:', {
+      receivedState: state,
+      storedStates: [...(global.oauthStates?.keys() || [])]
+    });
+    return res.status(400).json({ error: 'Invalid state parameter' });
+  }
+  
+  if (storedState.used) {
+    console.error('State parameter has already been used');
+    return res.status(400).json({ error: 'State parameter has already been used' });
+  }
+  
+  // Mark state as used
+  storedState.used = true;
+  
   try {
-    const { code, state, error, error_description } = req.query;
-    console.log('OAuth callback received:', { code: !!code, state, error });
-    
-    // Check for OAuth errors
-    if (error) {
-      console.error('Square OAuth error:', error, error_description);
-      return res.status(400).json({ 
-        error: 'OAuth error',
-        details: error_description || error
-      });
-    }
-    
-    // Get stored state
-    const storedState = req.cookies.square_oauth_state;
-    
-    // Clear OAuth cookies immediately
-    res.clearCookie('square_oauth_state');
-    
-    // Validate state parameter
-    if (!state || !storedState || state !== storedState) {
-      console.error('State parameter mismatch');
-      console.log('Received state:', state);
-      console.log('Stored state:', storedState);
-      return res.status(400).json({ error: 'Invalid state parameter' });
-    }
-    
-    // Exchange code for token - no code verifier needed since we're not using PKCE
+    // Exchange code for token
     console.log('Exchanging code for token...');
     const tokenData = await exchangeCodeForToken(code);
     console.log('Token exchange successful');
@@ -137,8 +126,12 @@ router.get('/square/callback', async (req, res) => {
       { expiresIn: '24h' }
     );
     
+    // Clean up used state
+    global.oauthStates.delete(state);
+    
     // Redirect to frontend with token
-    const redirectUrl = new URL('/auth/callback', process.env.FRONTEND_URL || 'http://localhost:3000');
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const redirectUrl = new URL('/auth/callback', frontendUrl);
     redirectUrl.searchParams.set('token', token);
     
     res.redirect(redirectUrl.toString());
@@ -146,8 +139,7 @@ router.get('/square/callback', async (req, res) => {
     console.error('Error in OAuth callback:', error);
     res.status(500).json({ 
       error: 'Failed to complete OAuth flow',
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });

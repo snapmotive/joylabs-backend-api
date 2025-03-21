@@ -7,19 +7,22 @@ provider:
   runtime: nodejs18.x
   stage: ${opt:stage, 'dev'}
   region: ${opt:region, 'us-west-1'}
+  memorySize: 512
+  timeout: 30
   environment:
     NODE_ENV: ${opt:stage, 'dev'}
     PRODUCTS_TABLE: joylabs-catalog-products-${self:provider.stage}
     CATEGORIES_TABLE: joylabs-catalog-categories-${self:provider.stage}
     USERS_TABLE: ${env:USERS_TABLE, 'joylabs-catalog-users-${self:provider.stage}'}
     WEBHOOKS_TABLE: joylabs-catalog-webhooks-${self:provider.stage}
-    JWT_SECRET: ${env:JWT_SECRET, ''}
-    SQUARE_APPLICATION_ID: ${env:SQUARE_APPLICATION_ID, ''}
-    SQUARE_APPLICATION_SECRET: ${env:SQUARE_APPLICATION_SECRET, ''}
+    SESSIONS_TABLE: joylabs-sessions-${self:provider.stage}
+    JWT_SECRET: ${ssm:/joylabs/${self:provider.stage}/JWT_SECRET}
+    SQUARE_CREDENTIALS_SECRET: !Ref SquareCredentialsSecret
     SQUARE_ENVIRONMENT: ${env:SQUARE_ENVIRONMENT, 'production'}
-    SQUARE_REDIRECT_URL: ${env:SQUARE_REDIRECT_URL, 'http://localhost:3001/api/auth/square/callback'}
-    API_BASE_URL: ${env:API_BASE_URL, 'http://localhost:3001'}
+    SQUARE_REDIRECT_URL: ${env:SQUARE_REDIRECT_URL, 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/${self:provider.stage}/api/auth/square/callback'}
+    API_BASE_URL: ${env:API_BASE_URL, 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/${self:provider.stage}'}
     API_PROD_URL: https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/${self:provider.stage}
+    SESSION_SECRET: ${env:SESSION_SECRET, 'your-session-secret-here'}
   iamRoleStatements:
     - Effect: Allow
       Action:
@@ -36,6 +39,7 @@ provider:
         - !GetAtt CategoriesTable.Arn
         - !GetAtt UsersTable.Arn
         - !GetAtt WebhooksTable.Arn
+        - !GetAtt SessionsTable.Arn
         - !Join ['', [!GetAtt ProductsTable.Arn, '/index/*']]
         - !Join ['', [!GetAtt CategoriesTable.Arn, '/index/*']]
         - !Join ['', [!GetAtt UsersTable.Arn, '/index/*']]
@@ -58,6 +62,24 @@ provider:
         - cloudwatch:PutMetricData
       Resource: "*"
 
+package:
+  patterns:
+    - '!node_modules/.prisma/**'
+    - '!node_modules/@prisma/**'
+    - '!node_modules/prisma/**'
+    - '!tests/**'
+    - '!coverage/**'
+    - '!.git/**'
+    - '!.github/**'
+    - '!.vscode/**'
+    - '!README.md'
+    - '!.env*'
+    - '!*.log'
+    - 'node_modules/**'
+    - 'src/**'
+    - 'package.json'
+    - 'package-lock.json'
+
 custom:
   serverless-offline:
     httpPort: 3001
@@ -79,6 +101,8 @@ custom:
     - X-Amz-Security-Token
     - X-Amz-User-Agent
     - X-Requested-With
+    - Cookie
+    - Set-Cookie
   allowedMethods:
     - GET
     - POST
@@ -129,6 +153,13 @@ functions:
             origin: '*'
             headers: ${self:custom.allowedHeaders}
             allowCredentials: true
+      - http:
+          path: /auth/success
+          method: GET
+          cors:
+            origin: '*'
+            headers: ${self:custom.allowedHeaders}
+            allowCredentials: true
             
   # Add webhook handler for Square
   squareWebhook:
@@ -141,6 +172,21 @@ functions:
 
 resources:
   Resources:
+    SessionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: joylabs-sessions-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        TimeToLiveSpecification:
+          AttributeName: expires
+          Enabled: true
+          
     GatewayResponseDefault4XX:
       Type: 'AWS::ApiGateway::GatewayResponse'
       Properties:
@@ -246,9 +292,9 @@ resources:
     SquareCredentialsSecret:
       Type: AWS::SecretsManager::Secret
       Properties:
-        Name: joylabs/${self:provider.stage}/square-credentials
-        Description: Square OAuth credentials for JoyLabs Catalog
-        SecretString: '{"SQUARE_APPLICATION_ID":"sq0idp-WFTYv3An7NPv6ovGFLld1Q","SQUARE_APPLICATION_SECRET":"sq0csp-z8vgtFYXtjEbXMGW9fjSgw9KsMLzJpoc7RrCCPoLdE4","SQUARE_ENVIRONMENT":"production","SQUARE_WEBHOOK_SIGNATURE_KEY":"YOUR_WEBHOOK_SIGNATURE_KEY"}'
+        Name: square-credentials-${self:provider.stage}
+        Description: Square API credentials for JoyLabs
+        SecretString: ${param:SQUARE_CREDENTIALS, '{"applicationId":"sq0idp-WFTYv3An7NPv6ovGFLld1Q","applicationSecret":"PLACEHOLDER"}'}
 
     # Webhooks table for Square event tracking
     WebhooksTable:

@@ -1,37 +1,56 @@
 const express = require('express');
 const serverless = require('serverless-http');
-const morgan = require('morgan');
-const dotenv = require('dotenv');
+const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
+const DynamoDBStore = require('connect-dynamodb')({ session });
+const AWS = require('aws-sdk');
 
 // Custom CORS middleware
 const configureCors = require('./middleware/cors');
 
-// Load environment variables
-dotenv.config();
-
 // Initialize express app
 const app = express();
 
+// Configure DynamoDB session store
+const dynamoDb = process.env.IS_OFFLINE === 'true'
+  ? new AWS.DynamoDB({
+      region: 'localhost',
+      endpoint: 'http://localhost:8000'
+    })
+  : new AWS.DynamoDB();
+
+const sessionStore = new DynamoDBStore({
+  table: 'joylabs-sessions-' + process.env.NODE_ENV,
+  client: dynamoDb,
+  hashKey: 'id',
+  ttl: 24 * 60 * 60 // 1 day TTL
+});
+
 // Apply CORS middleware with custom configuration
-app.use(configureCors());
+app.use(cors({
+  origin: true,
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'Cookie'],
+  exposedHeaders: ['Set-Cookie']
+}));
 
 // Apply middlewares
 app.use(express.json());
-app.use(morgan('dev'));
-app.use(cookieParser(process.env.COOKIE_SECRET || 'joylabs-secret'));
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // Configure session
 app.use(session({
+  store: sessionStore,
   secret: process.env.SESSION_SECRET || 'joylabs-session-secret',
   resave: false,
   saveUninitialized: false,
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    sameSite: 'none'
+    sameSite: 'none',
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
 
@@ -72,9 +91,9 @@ app.get('/', (req, res) => {
 // Global error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ 
-    error: true, 
-    message: err.message || 'An error occurred on the server' 
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 

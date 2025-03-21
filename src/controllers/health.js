@@ -247,7 +247,7 @@ function renderTestPage(req, res) {
 /**
  * OAuth Test Page
  */
-const oauthTestPage = (req, res) => {
+function oauthTestPage(req, res) {
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -288,74 +288,43 @@ const oauthTestPage = (req, res) => {
             background: #2b6fc5;
           }
           h1, h2 { margin-top: 0; }
-          .code {
-            background: #f5f5f5;
-            padding: 15px;
+          .env-info {
+            background: #e8f5e9;
+            padding: 10px;
             border-radius: 4px;
-            font-family: monospace;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
+            margin: 10px 0;
           }
-          #authResult {
-            display: none;
-            margin-top: 20px;
+          .warning {
+            background: #fff3e0;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
           }
         </style>
       </head>
       <body>
         <div class="card">
           <h1>Square OAuth Test</h1>
-          <p>Use the buttons below to test different OAuth flows.</p>
           
-          <h2>Web OAuth Flow</h2>
-          <a href="/api/auth/square" class="button">Start Web OAuth</a>
-          
-          <h2>Web OAuth with Custom State (for testing)</h2>
-          <a href="/api/auth/square?state=test-state-parameter" class="button">OAuth with Test State</a>
-          
-          <h2>Mobile App OAuth Flow</h2>
-          <button id="mobileOAuthBtn">Simulate Mobile OAuth</button>
-          <div id="authResult" class="card">
-            <h2>Authorization Result</h2>
-            <div id="authResultContent" class="code"></div>
+          <div class="env-info">
+            <strong>Environment:</strong> ${process.env.NODE_ENV}<br>
+            <strong>Square Environment:</strong> ${process.env.SQUARE_ENVIRONMENT}<br>
+            <strong>Redirect URL:</strong> ${process.env.SQUARE_REDIRECT_URL}
           </div>
+          
+          <div class="warning">
+            <strong>Note:</strong> Each OAuth attempt will generate a unique state parameter for security.
+            The state parameter is stored temporarily and validated when Square redirects back to your application.
+          </div>
+          
+          <h2>Start OAuth Flow</h2>
+          <p>Click the button below to start the Square OAuth flow:</p>
+          <a href="/api/auth/square" class="button">Start OAuth Flow</a>
         </div>
-
-        <script>
-          document.getElementById('mobileOAuthBtn').addEventListener('click', async () => {
-            try {
-              // Step 1: Initialize OAuth parameters
-              const initResponse = await fetch('/api/auth/square/mobile-init');
-              const initData = await initResponse.json();
-              
-              console.log('OAuth Initialization:', initData);
-              
-              // Display the parameters
-              document.getElementById('authResultContent').innerHTML = 
-                'OAuth Parameters:' + 
-                '\\n\\nState: ' + initData.state + 
-                '\\n\\nCode Verifier: ' + initData.codeVerifier +
-                '\\n\\nCode Challenge: ' + initData.codeChallenge +
-                '\\n\\nAuthorization URL: ' + initData.authUrl;
-              
-              document.getElementById('authResult').style.display = 'block';
-              
-              // Step 2: In a real app, you would redirect to the auth URL
-              if (confirm('Open the Square authorization URL?')) {
-                window.open(initData.authUrl, '_blank');
-              }
-            } catch (error) {
-              console.error('Error:', error);
-              document.getElementById('authResultContent').innerHTML = 'Error: ' + error.message;
-              document.getElementById('authResult').style.display = 'block';
-            }
-          });
-        </script>
       </body>
     </html>
   `);
-};
+}
 
 /**
  * OAuth debug and test tool

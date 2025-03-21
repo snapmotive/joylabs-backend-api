@@ -27,51 +27,12 @@ const User = {
     
     console.log(`Looking up user by Square merchant ID: ${merchantId}`);
     
-    // Special handling for TEST_ prefixed merchant IDs - always create a mock user
-    if (merchantId.startsWith('TEST_')) {
-      console.log('Using mock data for test merchant ID');
-      // Create a mock user if it doesn't exist
-      const testUserId = `test-user-${merchantId}`;
-      if (!mockUsers[testUserId]) {
-        mockUsers[testUserId] = {
-          id: testUserId,
-          square_merchant_id: merchantId,
-          name: 'Test User',
-          email: `test-${merchantId.toLowerCase()}@example.com`,
-          square_access_token: `TEST_ACCESS_${merchantId}`,
-          square_refresh_token: `TEST_REFRESH_${merchantId}`,
-          square_token_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-      }
-      return mockUsers[testUserId];
-    }
-    
-    // Check mock data first if enabled
-    if (useMockData) {
-      console.log('Using mock data for user lookup');
-      const mockUser = Object.values(mockUsers).find(u => u.square_merchant_id === merchantId);
-      if (mockUser) {
-        console.log('Found user in mock data:', mockUser.id);
-        return mockUser;
-      }
-    }
-    
     try {
       // Check if we can use DynamoDB
-      let dynamoDbAvailable = true;
-      try {
-        await dynamoDb.scan({ TableName: process.env.USERS_TABLE, Limit: 1 }).promise();
-      } catch (error) {
-        console.warn('DynamoDB not available, using only mock data:', error.message);
-        dynamoDbAvailable = false;
+      if (!process.env.USERS_TABLE) {
+        throw new Error('USERS_TABLE environment variable is not set');
       }
-      
-      if (!dynamoDbAvailable) {
-        return null;
-      }
-      
+
       const params = {
         TableName: process.env.USERS_TABLE,
         IndexName: 'SquareMerchantIndex',
@@ -81,6 +42,8 @@ const User = {
         }
       };
       
+      console.log('Querying DynamoDB with params:', JSON.stringify(params, null, 2));
+      
       const result = await dynamoDb.query(params).promise();
       
       if (result.Items && result.Items.length > 0) {
@@ -88,194 +51,122 @@ const User = {
         return result.Items[0];
       }
       
+      console.log('No user found with merchant ID:', merchantId);
       return null;
     } catch (error) {
       console.error('Error finding user by Square merchant ID:', error);
-      
-      // In development, return null rather than throwing
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('Returning null for user lookup in development');
-        return null;
-      }
-      
       throw error;
     }
   },
   
   // Create a new user
   async create(userData) {
-    if (!userData) {
-      throw new Error('User data is required');
+    if (!userData || !userData.square_merchant_id) {
+      throw new Error('User data with Square merchant ID is required');
     }
-    
-    console.log('Creating new user with data:', JSON.stringify(userData));
-    
-    // Generate a unique ID
-    const userId = userData.id || uuidv4();
-    
-    // Create user object
-    const user = {
-      id: userId,
-      name: userData.name || userData.businessName,
-      email: userData.email,
-      square_merchant_id: userData.square_merchant_id || userData.squareMerchantId,
-      square_access_token: userData.square_access_token || userData.squareAccessToken,
-      square_refresh_token: userData.square_refresh_token || userData.squareRefreshToken,
-      square_token_expires_at: userData.square_token_expires_at || userData.squareTokenExpiresAt,
-      created_at: userData.created_at || userData.createdAt || new Date().toISOString(),
-      updated_at: userData.updated_at || userData.updatedAt || new Date().toISOString()
-    };
-    
-    // Handle special TEST_ prefixed merchant IDs
-    if (user.square_merchant_id && user.square_merchant_id.startsWith('TEST_')) {
-      console.log('Using mock data for test merchant ID creation');
-      mockUsers[userId] = user;
-      return userId;
-    }
-    
-    // Use mock data if enabled
-    if (useMockData) {
-      console.log('Using mock data for user creation');
-      mockUsers[userId] = user;
-      return userId;
-    }
-    
+
     try {
-      // Check if we can use DynamoDB
-      let dynamoDbAvailable = true;
-      try {
-        await dynamoDb.scan({ TableName: process.env.USERS_TABLE, Limit: 1 }).promise();
-      } catch (error) {
-        console.warn('DynamoDB not available, using only mock data:', error.message);
-        dynamoDbAvailable = false;
+      if (!process.env.USERS_TABLE) {
+        throw new Error('USERS_TABLE environment variable is not set');
       }
-      
-      if (!dynamoDbAvailable) {
-        mockUsers[userId] = user;
-        return userId;
-      }
-      
-      // Save to DynamoDB
+
+      const timestamp = new Date().toISOString();
+      const userId = userData.id || `user-${uuidv4()}`;
+
+      const item = {
+        id: userId,
+        name: userData.name || 'Unknown User',
+        email: userData.email,
+        square_merchant_id: userData.square_merchant_id,
+        square_access_token: userData.square_access_token,
+        square_refresh_token: userData.square_refresh_token,
+        square_token_expires_at: userData.square_token_expires_at,
+        created_at: timestamp,
+        updated_at: timestamp
+      };
+
       const params = {
         TableName: process.env.USERS_TABLE,
-        Item: user
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(id)'
       };
-      
+
+      console.log('Creating user with params:', JSON.stringify({
+        ...params,
+        Item: {
+          ...params.Item,
+          square_access_token: '[REDACTED]',
+          square_refresh_token: '[REDACTED]'
+        }
+      }, null, 2));
+
       await dynamoDb.put(params).promise();
-      
-      return userId;
+      console.log('Successfully created user:', userId);
+
+      return item;
     } catch (error) {
       console.error('Error creating user:', error);
-      
-      // In development, use mock data as fallback
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('Falling back to mock data for user creation in development');
-        mockUsers[userId] = user;
-        return userId;
-      }
-      
       throw error;
     }
   },
   
   // Update an existing user
   async update(userId, updateData) {
-    if (!userId) {
-      throw new Error('User ID is required');
+    if (!userId || !updateData) {
+      throw new Error('User ID and update data are required');
     }
-    
-    console.log(`Updating user ${userId} with data:`, JSON.stringify(updateData, null, 2));
-    
-    // Check mock data first if enabled
-    if (useMockData && mockUsers[userId]) {
-      console.log('Updating mock user data');
-      mockUsers[userId] = {
-        ...mockUsers[userId],
-        ...updateData,
-        updated_at: new Date().toISOString()
-      };
-      return mockUsers[userId];
-    }
-    
+
     try {
-      // Check if we can use DynamoDB
-      let dynamoDbAvailable = true;
-      try {
-        await dynamoDb.scan({ TableName: process.env.USERS_TABLE, Limit: 1 }).promise();
-      } catch (error) {
-        console.warn('DynamoDB not available, using only mock data:', error.message);
-        dynamoDbAvailable = false;
+      if (!process.env.USERS_TABLE) {
+        throw new Error('USERS_TABLE environment variable is not set');
       }
+
+      const timestamp = new Date().toISOString();
       
-      if (!dynamoDbAvailable) {
-        if (!mockUsers[userId]) {
-          throw new Error(`User with ID ${userId} not found`);
-        }
-        
-        mockUsers[userId] = {
-          ...mockUsers[userId],
-          ...updateData,
-          updated_at: new Date().toISOString()
-        };
-        
-        return mockUsers[userId];
-      }
-      
-      // Build update expression
-      let updateExpression = 'SET updated_at = :updatedAt';
-      const expressionAttributeValues = {
-        ':updatedAt': new Date().toISOString()
-      };
-      
-      // Add update fields to expression
-      Object.keys(updateData).forEach((key, index) => {
-        updateExpression += `, #key${index} = :value${index}`;
-        expressionAttributeValues[`:value${index}`] = updateData[key];
-      });
-      
-      // Build expression attribute names
+      // Build update expression and attribute values
+      const updateExpressions = [];
       const expressionAttributeNames = {};
-      Object.keys(updateData).forEach((key, index) => {
-        expressionAttributeNames[`#key${index}`] = key;
+      const expressionAttributeValues = {};
+
+      Object.entries(updateData).forEach(([key, value]) => {
+        if (value !== undefined) {
+          const attributeName = `#${key}`;
+          const attributeValue = `:${key}`;
+          updateExpressions.push(`${attributeName} = ${attributeValue}`);
+          expressionAttributeNames[attributeName] = key;
+          expressionAttributeValues[attributeValue] = value;
+        }
       });
-      
-      // Update in DynamoDB
+
+      // Always update the updated_at timestamp
+      updateExpressions.push('#updated_at = :updated_at');
+      expressionAttributeNames['#updated_at'] = 'updated_at';
+      expressionAttributeValues[':updated_at'] = timestamp;
+
       const params = {
         TableName: process.env.USERS_TABLE,
         Key: { id: userId },
-        UpdateExpression: updateExpression,
-        ExpressionAttributeValues: expressionAttributeValues,
+        UpdateExpression: `SET ${updateExpressions.join(', ')}`,
         ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
         ReturnValues: 'ALL_NEW'
       };
-      
+
+      console.log('Updating user with params:', JSON.stringify({
+        ...params,
+        ExpressionAttributeValues: {
+          ...params.ExpressionAttributeValues,
+          ':square_access_token': '[REDACTED]',
+          ':square_refresh_token': '[REDACTED]'
+        }
+      }, null, 2));
+
       const result = await dynamoDb.update(params).promise();
-      
+      console.log('Successfully updated user:', userId);
+
       return result.Attributes;
     } catch (error) {
       console.error('Error updating user:', error);
-      
-      // In development, use mock data as fallback
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('Falling back to mock data for user update in development');
-        
-        if (!mockUsers[userId]) {
-          mockUsers[userId] = {
-            id: userId,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          };
-        }
-        
-        mockUsers[userId] = {
-          ...mockUsers[userId],
-          ...updateData,
-          updated_at: new Date().toISOString()
-        };
-        
-        return mockUsers[userId];
-      }
-      
       throw error;
     }
   },
