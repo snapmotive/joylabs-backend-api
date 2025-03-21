@@ -53,7 +53,7 @@ app.get('/api/auth/square/callback', async (req, res) => {
       user = await User.update(user.id, {
         square_access_token: tokenResponse.access_token,
         square_refresh_token: tokenResponse.refresh_token,
-        square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+        square_token_expires_at: tokenResponse.expires_at
       });
     } else {
       // Create a new user
@@ -63,7 +63,7 @@ app.get('/api/auth/square/callback', async (req, res) => {
         square_merchant_id: merchantInfo.id,
         square_access_token: tokenResponse.access_token,
         square_refresh_token: tokenResponse.refresh_token,
-        square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+        square_token_expires_at: tokenResponse.expires_at
       });
     }
     

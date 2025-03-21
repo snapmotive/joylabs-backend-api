@@ -1,4 +1,3 @@
-require('dotenv').config();
 const axios = require('axios');
 const crypto = require('crypto');
 const AWS = require('aws-sdk');
@@ -11,37 +10,22 @@ const secretsManager = new AWS.SecretsManager();
 let squareCredentials = null;
 
 /**
- * Get Square credentials from AWS Secrets Manager or environment variables
+ * Get Square credentials from AWS Secrets Manager
  */
 const getSquareCredentials = async () => {
-  // Clear cache for development
-  if (process.env.IS_OFFLINE || process.env.NODE_ENV === 'development') {
-    squareCredentials = null;
-  }
-  
   // Return cached credentials if available
   if (squareCredentials) {
     return squareCredentials;
   }
   
   try {
-    // If running locally or environment variables are set, use them
-    if (process.env.IS_OFFLINE || process.env.SQUARE_APPLICATION_ID) {
-      console.log('Using local environment variables for Square credentials');
-      console.log(`Application ID: ${process.env.SQUARE_APPLICATION_ID}`);
-      console.log(`Environment: ${process.env.SQUARE_ENVIRONMENT}`);
-      
+    // If running locally and credentials are in environment variables, use those
+    if (process.env.IS_OFFLINE === 'true' && process.env.SQUARE_APPLICATION_ID) {
       squareCredentials = {
         SQUARE_APPLICATION_ID: process.env.SQUARE_APPLICATION_ID,
         SQUARE_APPLICATION_SECRET: process.env.SQUARE_APPLICATION_SECRET,
-        SQUARE_ENVIRONMENT: process.env.SQUARE_ENVIRONMENT || 'sandbox'
+        SQUARE_ENVIRONMENT: process.env.SQUARE_ENVIRONMENT
       };
-      
-      console.log('Loaded credentials:', {
-        environment: squareCredentials.SQUARE_ENVIRONMENT,
-        applicationId: squareCredentials.SQUARE_APPLICATION_ID
-      });
-      
       return squareCredentials;
     }
     
@@ -57,7 +41,14 @@ const getSquareCredentials = async () => {
     }
   } catch (error) {
     console.error('Error fetching Square credentials:', error);
-    throw error;
+    
+    // Fallback to environment variables
+    squareCredentials = {
+      SQUARE_APPLICATION_ID: process.env.SQUARE_APPLICATION_ID,
+      SQUARE_APPLICATION_SECRET: process.env.SQUARE_APPLICATION_SECRET,
+      SQUARE_ENVIRONMENT: process.env.SQUARE_ENVIRONMENT
+    };
+    return squareCredentials;
   }
 };
 
@@ -65,14 +56,13 @@ const getSquareCredentials = async () => {
  * Get a configured Square API client
  */
 function getSquareClient(accessToken = null) {
-  console.log('Creating Square client with environment:', process.env.SQUARE_ENVIRONMENT);
+  console.log('Creating Square client');
+  console.log(`Using environment: ${process.env.SQUARE_ENVIRONMENT || 'sandbox'}`);
   
-  // Always use production unless explicitly set to sandbox
-  const environment = process.env.SQUARE_ENVIRONMENT !== 'sandbox' 
+  // Set environment based on configuration
+  const environment = process.env.SQUARE_ENVIRONMENT === 'production' 
     ? Environment.Production 
     : Environment.Sandbox;
-  
-  console.log('Using Square environment:', environment);
   
   // Create client configuration
   const clientConfig = {
@@ -87,16 +77,7 @@ function getSquareClient(accessToken = null) {
   }
   
   // Create the Square client
-  const client = new Client(clientConfig);
-  
-  // Log client configuration (excluding sensitive data)
-  console.log('Square client configuration:', {
-    environment: clientConfig.environment,
-    userAgentDetail: clientConfig.userAgentDetail,
-    hasAccessToken: !!clientConfig.accessToken
-  });
-  
-  return client;
+  return new Client(clientConfig);
 }
 
 /**
@@ -136,68 +117,80 @@ function generateRandomString(length = 32) {
   return result;
 }
 
-const getRedirectUrl = () => {
-  // For local development or sandbox mode
-  if (process.env.IS_OFFLINE || process.env.NODE_ENV === 'development' || process.env.SQUARE_ENVIRONMENT === 'sandbox') {
-    return 'http://localhost:3001/api/auth/square/callback';
-  }
-  
-  // For production - always use AWS URL
-  return 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback';
-};
-
 /**
  * Generate OAuth URL for Square authorization
  */
-const generateOAuthUrl = async (state) => {
-  const credentials = await getSquareCredentials();
-  const applicationId = credentials.applicationId || process.env.SQUARE_APPLICATION_ID;
+async function generateOAuthUrl(state, codeVerifier) {
+  console.log('Generating Square OAuth URL');
+  console.log(`Environment: ${process.env.SQUARE_ENVIRONMENT || 'sandbox'}`);
   
-  if (!applicationId) {
-    throw new Error('Square application ID not configured');
+  // Handle missing state parameter
+  if (!state) {
+    console.log('No state parameter provided, generating a random one');
+    state = generateRandomString(32);
   }
-
-  // Log the application ID being used
-  console.log('Using application ID:', applicationId);
-  console.log('Environment:', process.env.SQUARE_ENVIRONMENT);
   
-  const params = new URLSearchParams({
-    client_id: applicationId,
-    response_type: 'code',
-    scope: 'MERCHANT_PROFILE_READ',
-    redirect_uri: getRedirectUrl(),
-    state: state
+  // Get the Square client
+  const client = getSquareClient();
+  
+  // Configure the authorization URL
+  const authorizationUrl = client.oauth2.getAuthorizationUrl({
+    clientId: process.env.SQUARE_APPLICATION_ID,
+    scopes: [
+      'MERCHANT_PROFILE_READ',
+      'ITEMS_READ',
+      'ITEMS_WRITE',
+      'ORDERS_READ',
+      'ORDERS_WRITE',
+      'PAYMENTS_READ',
+      'PAYMENTS_WRITE',
+      'CUSTOMERS_READ',
+      'CUSTOMERS_WRITE',
+      'INVENTORY_READ',
+      'INVENTORY_WRITE'
+    ],
+    squareConnectScopes: [
+      'MERCHANT_PROFILE_READ',
+      'ITEMS_READ',
+      'ITEMS_WRITE',
+      'ORDERS_READ',
+      'ORDERS_WRITE',
+      'PAYMENTS_READ',
+      'PAYMENTS_WRITE',
+      'CUSTOMERS_READ',
+      'CUSTOMERS_WRITE',
+      'INVENTORY_READ',
+      'INVENTORY_WRITE'
+    ],
+    state: state,
+    redirectUri: process.env.SQUARE_REDIRECT_URL || null
   });
-
-  // Use connect.squareup.com for production, squareup.com for sandbox
-  const baseUrl = process.env.SQUARE_ENVIRONMENT === 'production' 
-    ? 'https://connect.squareup.com/oauth2/authorize'
-    : 'https://connect.squareup.com/oauth2/authorize';
-
-  const url = `${baseUrl}?${params.toString()}`;
-  console.log('Generated OAuth URL:', url);
   
-  return url;
-};
+  // Use PKCE (Proof Key for Code Exchange) if a code verifier is provided
+  if (codeVerifier) {
+    console.log('Using PKCE flow with code verifier');
+    const codeChallenge = generateCodeChallenge(codeVerifier);
+    return `${authorizationUrl}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
+  }
+  
+  console.log('Generated OAuth URL (without PKCE)');
+  return authorizationUrl;
+}
 
 /**
  * Exchange authorization code for OAuth token
  */
-async function exchangeCodeForToken(code, code_verifier = null) {
+async function exchangeCodeForToken(code, code_verifier) {
   console.log('Exchanging authorization code for token');
-  console.log(`Using Square Environment: ${process.env.SQUARE_ENVIRONMENT}`);
   
-  // Special handling for test code - create mock token regardless of environment
+  // Handle test code for testing scenarios
   if (code === 'test_authorization_code') {
-    console.log('Using test authorization code with mock response');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30); // Add 30 days
-    
+    console.log('Using test authorization code, returning mock tokens');
     return {
       merchant_id: 'TEST_MERCHANT_123',
       access_token: 'TEST_ACCESS_TOKEN_123',
       refresh_token: 'TEST_REFRESH_TOKEN_123',
-      expires_at: expiresAt.toISOString() // 30 days from now
+      expires_at: new Date(Date.now() + 86400000 * 30).toISOString() // 30 days from now
     };
   }
   
@@ -206,33 +199,22 @@ async function exchangeCodeForToken(code, code_verifier = null) {
     console.log(`Application ID: ${process.env.SQUARE_APPLICATION_ID}`);
     console.log(`Application Secret: ${process.env.SQUARE_APPLICATION_SECRET ? '******' : 'NOT SET'}`);
     console.log(`Environment: ${process.env.SQUARE_ENVIRONMENT}`);
-    console.log(`Redirect URL: ${getRedirectUrl()}`);
     
-    // Get Square client
     const client = getSquareClient();
     
-    // Construct the token request
-    const tokenRequest = {
+    console.log('Obtaining Access Token from Square API');
+    console.log(`Code: ${code ? '******' : 'NOT SET'}`);
+    console.log(`Redirect URL: ${process.env.SQUARE_REDIRECT_URL}`);
+    console.log(`Code Verifier: ${code_verifier ? '******' : 'NOT SET'}`);
+    
+    const response = await client.oAuthApi.obtainToken({
       clientId: process.env.SQUARE_APPLICATION_ID,
       clientSecret: process.env.SQUARE_APPLICATION_SECRET,
       code,
+      redirectUri: process.env.SQUARE_REDIRECT_URL,
       grantType: 'authorization_code',
-      redirectUri: getRedirectUrl()
-    };
-    
-    // Add code verifier for PKCE if available
-    if (code_verifier) {
-      console.log('Using PKCE code verifier');
-      tokenRequest.codeVerifier = code_verifier;
-    }
-    
-    // Log request details (excluding sensitive info)
-    const logSafeRequest = { ...tokenRequest };
-    delete logSafeRequest.clientSecret;
-    console.log('Token Exchange Request:', JSON.stringify(logSafeRequest, null, 2));
-    
-    // Make the token request
-    const response = await client.oAuthApi.obtainToken(tokenRequest);
+      codeVerifier: code_verifier
+    });
     
     if (response.statusCode !== 200) {
       console.error('Error obtaining token:', response.body);
@@ -242,34 +224,16 @@ async function exchangeCodeForToken(code, code_verifier = null) {
     console.log('Access token obtained successfully');
     const data = response.result;
     
-    // Calculate expires_at from expires_in
-    const expiresAt = new Date();
-    expiresAt.setSeconds(expiresAt.getSeconds() + data.expiresIn);
-    
     return {
       merchant_id: data.merchantId,
       access_token: data.accessToken,
       refresh_token: data.refreshToken,
-      expires_at: expiresAt.toISOString()
+      expires_at: new Date(Date.now() + (data.expiresIn * 1000)).toISOString()
     };
     
   } catch (error) {
     console.error('Error exchanging code for token:', error);
-    
-    // Extract detailed error information
-    const statusCode = error.statusCode || 500;
-    const errorDetails = error.errors || [];
-    
-    const errorMessage = `Failed to exchange code for token: ${errorDetails[0]?.detail || error.message}`;
-    console.error('API Error details:', JSON.stringify(errorDetails, null, 2));
-    
-    // Rethrow with better formatting
-    const formattedError = new Error(errorMessage);
-    formattedError.originalError = error;
-    formattedError.statusCode = statusCode;
-    formattedError.squareDetails = errorDetails;
-    
-    throw formattedError;
+    throw error;
   }
 }
 
@@ -450,4 +414,4 @@ module.exports = {
   generateRandomString,
   createMockTokenResponse,
   createMockMerchantInfo
-};
+}; 

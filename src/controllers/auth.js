@@ -1,78 +1,61 @@
 const User = require('../models/user');
 const squareService = require('../services/square');
 const security = require('../utils/security');
+const crypto = require('crypto');
 
 /**
  * Start Square OAuth flow with PKCE support for mobile apps
  */
 async function startSquareOAuth(req, res) {
   try {
-    // Check if a state was passed in the request (for mobile apps)
-    const state = req.query.state || squareService.generateStateParam();
+    // Get or generate a state parameter (can use provided state or generate a new one)
+    const state = req.query.state || crypto.randomBytes(16).toString('hex');
+    console.log(`Starting OAuth flow with state: ${state}`);
     
-    console.log('Starting OAuth flow with state:', state);
-    console.log('Request from User-Agent:', req.headers['user-agent']);
-    console.log('Request from Origin:', req.headers.origin);
+    // Log important request details for debugging
+    console.log(`Request from User-Agent: ${req.headers['user-agent']}`);
+    console.log(`Request from Origin: ${req.headers.origin}`);
     
-    // Generate PKCE code verifier and challenge if client indicates it supports PKCE
-    let codeVerifier = null;
-    let codeChallenge = null;
+    // Log OAuth activity for monitoring
+    console.log('OAuth Activity:', JSON.stringify({
+      action: 'oauth_start',
+      ip: req.ip,
+      user_agent: req.headers['user-agent'],
+      using_pkce: false
+    }));
     
-    if (req.query.pkce === 'true') {
-      codeVerifier = squareService.generateCodeVerifier();
-      codeChallenge = squareService.generateCodeChallenge(codeVerifier);
-      
-      // Store the code verifier in a cookie for later verification
-      // Mobile apps may not support cookies, so we'll need a different approach
-      res.cookie('square_code_verifier', codeVerifier, { 
-        httpOnly: true, 
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 10 * 60 * 1000, // 10 minutes
-        sameSite: 'none', // Allow cross-site cookies for OAuth flow
-        path: '/'
-      });
-      
-      // Log PKCE usage for security monitoring
-      await security.logOAuthActivity({
-        action: 'oauth_start',
-        ip: req.ip,
-        user_agent: req.headers['user-agent'],
-        using_pkce: true
-      });
-    } else {
-      // Log non-PKCE OAuth start for security monitoring
-      await security.logOAuthActivity({
-        action: 'oauth_start',
-        ip: req.ip,
-        user_agent: req.headers['user-agent'],
-        using_pkce: false
-      });
-    }
+    // Get the redirect URL from configuration
+    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback';
+    console.log(`Redirect URL for OAuth: ${redirectUrl}`);
     
-    // Store the state in cookie for validation later
-    res.cookie('square_oauth_state', state, { 
-      httpOnly: true, 
+    // Set a cookie with the state parameter
+    res.cookie('square_oauth_state', state, {
+      httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      maxAge: 10 * 60 * 1000, // 10 minutes
-      sameSite: 'none', // Allow cross-site cookies for OAuth flow
-      path: '/'
+      sameSite: 'lax',
+      maxAge: 3600000 // 1 hour
     });
     
-    // For mobile apps, we'll also need to add the state to the session or other storage
-    if (req.session) {
-      req.session.square_oauth_state = state;
-    }
+    // Create the authorization URL
+    console.log(`Using state parameter: ${state}`);
+    const authUrl = `https://connect.squareup.com/oauth2/authorize?client_id=${
+      process.env.SQUARE_APPLICATION_ID
+    }&scope=${
+      encodeURIComponent('ITEMS_READ ITEMS_WRITE INVENTORY_READ INVENTORY_WRITE MERCHANT_PROFILE_READ ORDERS_READ ORDERS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE')
+    }&response_type=code&redirect_uri=${
+      encodeURIComponent(redirectUrl)
+    }&state=${state}`;
     
-    // Generate the authorization URL with the state parameter and code challenge if available
-    const authUrl = await squareService.getAuthorizationUrl(state, codeChallenge);
+    console.log(`Redirecting to OAuth URL: ${authUrl}`);
     
-    console.log('Redirecting to OAuth URL:', authUrl);
-    
-    // Redirect the user to Square's OAuth page
+    // Redirect to the authorization URL
     res.redirect(authUrl);
   } catch (error) {
-    console.error('Error starting Square OAuth flow:', error);
-    res.status(500).json({ error: 'Failed to initiate OAuth flow' });
+    console.error('Error starting Square OAuth:', error);
+    res.status(500).json({
+      error: 'Failed to start OAuth process',
+      details: error.message
+    });
   }
 }
 
@@ -80,287 +63,206 @@ async function startSquareOAuth(req, res) {
  * Handle Square OAuth callback
  */
 async function handleSquareCallback(req, res) {
+  console.log('Square callback received', {
+    query: req.query,
+    cookies: req.cookies,
+    headers: {
+      host: req.headers.host,
+      origin: req.headers.origin,
+      referer: req.headers.referer
+    }
+  });
+  
   try {
-    // Check if this is a POST request from mobile app or GET from web flow
-    const isMobileFlow = req.method === 'POST';
+    // Get code and state from query parameters
+    const { code, state: receivedState } = req.query;
+
+    // Get stored state token and code verifier from cookies
+    const expectedState = req.cookies.square_oauth_state;
+    const codeVerifier = req.cookies.square_oauth_code_verifier;
     
-    // Check if this is a test callback with our specific test parameters
-    const isTestRequest = 
-      (code === 'test_authorization_code' || req.query.code === 'test_authorization_code') && 
-      (state === 'test-state-parameter' || req.query.state === 'test-state-parameter');
+    console.log(`Code received: ${code ? '✓' : '✗'}`);
+    console.log(`State parameter: ${receivedState}`);
+    console.log(`Expected state: ${expectedState}`);
+    console.log(`Code verifier: ${codeVerifier ? '✓' : '✗'}`);
     
-    // EXTENSIVE DEBUGGING LOGS - Print all available request information
-    console.log('====== OAUTH CALLBACK DEBUG ======');
-    console.log('Request Method:', req.method);
-    console.log('Request URL:', req.url);
-    console.log('Original URL:', req.originalUrl);
-    console.log('Is Test Callback:', isTestRequest);
-    console.log('Request Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Request Query:', JSON.stringify(req.query, null, 2));
-    console.log('Request Body:', JSON.stringify(req.body, null, 2));
-    console.log('Request Cookies:', JSON.stringify(req.cookies, null, 2));
-    if (req.session) {
-      console.log('Session Data:', JSON.stringify(req.session, null, 2));
+    // Clean up cookies regardless of outcome
+    res.clearCookie('square_oauth_state');
+    res.clearCookie('square_oauth_code_verifier');
+    
+    // Skip state validation for test_authorization_code in any environment
+    const isTestMode = code === 'test_authorization_code';
+    
+    // Validate state parameter to prevent CSRF (unless in test mode)
+    if (!isTestMode && (!receivedState || !expectedState || receivedState !== expectedState)) {
+      console.error('State validation failed:', { received: receivedState, expected: expectedState });
+      return res.status(400).json({ error: 'Invalid state parameter' });
     }
-    console.log('================================');
     
-    // For mobile flow, get params from request body
-    // For web flow, get params from request query
-    const code = isMobileFlow ? req.body.code : req.query.code;
-    const state = isMobileFlow ? req.body.state : req.query.state;
-    const codeVerifier = isMobileFlow ? req.body.code_verifier : null;
-    
-    console.log(`Callback received (${isMobileFlow ? 'mobile' : 'web'}) with state:`, state);
-    
+    // If no code was received, handle as an error or cancellation
     if (!code) {
-      // Log missing code
-      await security.logAuthFailure({
-        reason: 'missing_code',
-        ip: req.ip,
-        user_agent: req.headers['user-agent'],
-        flow: isMobileFlow ? 'mobile' : 'web'
-      });
-      
-      return res.status(400).json({ error: 'Authorization code is missing' });
+      console.error('No authorization code received');
+      return res.status(400).json({ error: 'Authorization code missing' });
     }
     
-    // *** IMPORTANT: Make state validation more permissive for testing ***
-    // For development purposes, accept any state to troubleshoot the rest of the flow
-    let bypassStateValidation = false;
+    console.log('Preparing to exchange code for token', {
+      code: code === 'test_authorization_code' ? 'test_authorization_code' : '***',
+      codeVerifier: codeVerifier ? '***' : 'not provided',
+      environment: process.env.SQUARE_ENVIRONMENT,
+      redirectUrl: process.env.SQUARE_REDIRECT_URL
+    });
     
-    // For test requests, be more permissive with state validation
-    if (isTestRequest) {
-      console.log('TEST REQUEST DETECTED: Using test parameters for OAuth flow');
-      bypassStateValidation = true;
-      
-      // When using test parameters, ensure we have a code verifier for PKCE
-      if (!codeVerifier) {
-        console.log('Setting test code verifier for PKCE in test mode');
-        codeVerifier = 'test-code-verifier';
+    // Check if redirect URL in env matches the current host
+    const currentHost = req.headers.host;
+    const configuredRedirectUrl = process.env.SQUARE_REDIRECT_URL;
+    
+    if (configuredRedirectUrl && !isTestMode) {
+      try {
+        const configuredHost = new URL(configuredRedirectUrl).host;
+        if (currentHost !== configuredHost) {
+          console.warn(`⚠️ Potential redirect mismatch - Current host: ${currentHost}, configured redirect URL host: ${configuredHost}`);
+        }
+      } catch (e) {
+        console.error('Error parsing redirect URL:', e.message);
       }
     }
     
-    // For web flow, verify state against cookie or session
-    if (!isMobileFlow) {
-      // Verify state parameter to prevent CSRF attacks
-      const savedState = req.cookies.square_oauth_state;
+    try {
+      // Exchange the authorization code for an access token
+      const tokenData = await squareService.exchangeCodeForToken(code, codeVerifier);
+      console.log('Token exchange successful', {
+        merchantId: tokenData.merchant_id ? 
+          (tokenData.merchant_id.startsWith('TEST_') ? tokenData.merchant_id : tokenData.merchant_id.substring(0, 10) + '...') 
+          : 'missing',
+        hasAccessToken: !!tokenData.access_token,
+        hasRefreshToken: !!tokenData.refresh_token
+      });
       
-      // For mobile apps, check session storage as well
-      const hasSessionState = req.session && 
-                              req.session.oauthParams && 
-                              req.session.oauthParams[state];
+      if (!tokenData || !tokenData.merchant_id) {
+        console.error('No merchant ID received in token response', tokenData);
+        return res.status(500).json({ error: 'Failed to complete OAuth flow - missing merchant ID' });
+      }
       
-      console.log('Saved state from cookie:', savedState);
-      console.log('Has session state:', hasSessionState);
+      const merchantId = tokenData.merchant_id;
+      console.log(`Merchant ID: ${merchantId}`);
       
-      if (!state) {
-        console.log('WARNING: Missing state parameter in callback');
+      // Find or create user by merchant ID
+      console.log('Looking up user by merchant ID', merchantId);
+      let user;
+      try {
+        user = await User.findBySquareMerchantId(merchantId);
+        console.log('User lookup result:', user ? 'Found' : 'Not found');
+      } catch (error) {
+        console.error('Error finding user:', error);
+        return res.status(500).json({ 
+          error: 'Failed to complete OAuth flow - user lookup error',
+          details: error.message
+        });
+      }
+      
+      if (!user) {
+        console.log('User not found, creating new user for merchant:', merchantId);
         
-        if (!bypassStateValidation) {
-          await security.logAuthFailure({
-            reason: 'missing_state',
-            ip: req.ip,
-            user_agent: req.headers['user-agent'],
-            flow: 'web'
+        // Get merchant information from Square
+        let merchantInfo;
+        try {
+          merchantInfo = await squareService.getMerchantInfo(tokenData.access_token);
+          console.log('Merchant info received:', merchantInfo);
+        } catch (error) {
+          console.error('Error getting merchant info:', error);
+          merchantInfo = { name: 'Square Merchant', email: 'unknown@example.com' };
+        }
+        
+        // Create new user
+        try {
+          user = await User.create({
+            square_merchant_id: merchantId,
+            name: merchantInfo.name || 'Square Merchant', 
+            email: merchantInfo.email || 'unknown@example.com',
+            square_access_token: tokenData.access_token,
+            square_refresh_token: tokenData.refresh_token,
+            square_token_expires_at: tokenData.expires_at
           });
           
-          return res.status(400).json({ error: 'Missing state parameter' });
-        } else {
-          console.log('BYPASSING state validation since we are in development mode or test callback');
+          console.log('New user created:', user.id);
+        } catch (error) {
+          console.error('Error creating user:', error);
+          return res.status(500).json({ 
+            error: 'Failed to complete OAuth flow - user creation error',
+            details: error.message
+          });
+        }
+      } else {
+        console.log('Updating existing user:', user.id);
+        
+        // Update existing user's tokens
+        try {
+          user = await User.update(user.id, {
+            square_access_token: tokenData.access_token,
+            square_refresh_token: tokenData.refresh_token,
+            square_token_expires_at: tokenData.expires_at,
+            updated_at: new Date().toISOString()
+          });
+          
+          console.log('User updated with new tokens');
+        } catch (error) {
+          console.error('Error updating user:', error);
+          return res.status(500).json({ 
+            error: 'Failed to complete OAuth flow - user update error',
+            details: error.message
+          });
         }
       }
       
-      // Allow the state if it's in the cookies OR in the session
-      // Also allowing test-state-parameter for testing
-      // In dev mode, we'll bypass the check entirely
-      const isValidState = bypassStateValidation || 
-                           (savedState && savedState === state) || 
-                           hasSessionState || 
-                           state === 'test-state-parameter';
-      
-      if (!isValidState) {
-        // Log security violation
-        console.error('Invalid state parameter received:', state);
-        console.error('Expected state from cookie:', savedState);
-        console.error('State in session:', hasSessionState ? 'yes' : 'no');
+      // Generate JWT token
+      console.log('Generating JWT token for user', user.id);
+      try {
+        const jwtToken = generateToken(user);
+        console.log('JWT token generated');
         
-        await security.logAuthFailure({
-          reason: 'invalid_state',
-          ip: req.ip,
-          expected: savedState,
-          received: state,
-          user_agent: req.headers['user-agent'],
-          flow: 'web'
+        // Determine redirect URL
+        const successUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const redirectUrl = `${successUrl}?token=${encodeURIComponent(jwtToken)}`;
+        
+        console.log(`Redirecting to: ${redirectUrl.substring(0, redirectUrl.indexOf('?') + 20)}...`);
+        return res.redirect(302, redirectUrl);
+      } catch (error) {
+        console.error('Error generating JWT:', error);
+        return res.status(500).json({ 
+          error: 'Failed to complete OAuth flow - authentication error',
+          details: error.message
         });
-        
-        return res.status(400).json({ error: 'Invalid state parameter' });
       }
-      
-      // Clear the state cookie
-      res.clearCookie('square_oauth_state');
-      
-      // Retrieve code verifier from session if using PKCE
-      if (hasSessionState) {
-        codeVerifier = req.session.oauthParams[state].codeVerifier;
-        console.log('Retrieved code verifier from session');
-        
-        // Clean up after use
-        delete req.session.oauthParams[state];
-      } else if (req.cookies.square_code_verifier) {
-        // For web flow, try to get code verifier from cookie
-        codeVerifier = req.cookies.square_code_verifier;
-        console.log('Looking for code verifier in cookies:', !!codeVerifier);
-        
-        res.clearCookie('square_code_verifier');
+    } catch (error) {
+      console.error('Error exchanging code for token:', error);
+      if (error.response) {
+        console.error('Response data:', error.response.data);
       }
-    } else {
-      // For mobile flow, validate that we have a state and code verifier
-      if (!state && !bypassStateValidation) {
-        await security.logAuthFailure({
-          reason: 'missing_state',
-          ip: req.ip,
-          user_agent: req.headers['user-agent'],
-          flow: 'mobile'
+      if (error.request) {
+        console.error('Request details:', {
+          method: error.request.method,
+          url: error.request.url,
+          headers: error.request.headers
         });
-        
-        return res.status(400).json({ error: 'Missing state parameter' });
       }
-      
-      if (!codeVerifier && !bypassStateValidation) {
-        await security.logAuthFailure({
-          reason: 'missing_code_verifier',
-          ip: req.ip,
-          user_agent: req.headers['user-agent'],
-          flow: 'mobile'
-        });
-        
-        return res.status(400).json({ error: 'Missing code verifier' });
-      }
+      throw error; // Re-throw to be handled by outer catch
     }
     
-    console.log('Proceeding to token exchange. Code:', !!code, 'CodeVerifier:', !!codeVerifier);
-    
-    // Exchange the authorization code for an access token
-    try {
-      // Use mock data for test callback
-      let tokenResponse;
-      let merchantInfo;
-      
-      if (isTestRequest || code === 'test_authorization_code') {
-        console.log('USING MOCK DATA FOR TEST CALLBACK');
-        
-        // Generate a fake access token that looks realistic
-        tokenResponse = {
-          access_token: 'TEST_EAAAEO' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15),
-          token_type: 'bearer',
-          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-          merchant_id: 'TEST_' + Math.random().toString(36).substring(2, 10),
-          refresh_token: 'TEST_REFRESH_' + Math.random().toString(36).substring(2, 15),
-          scope: 'ITEMS_READ ITEMS_WRITE MERCHANT_PROFILE_READ',
-          expires_in: 30 * 24 * 60 * 60 // 30 days in seconds
-        };
-        
-        // Create a fake merchant
-        merchantInfo = {
-          id: tokenResponse.merchant_id,
-          business_name: 'Test Production Merchant',
-          country: 'US',
-          language_code: 'en-US',
-          currency: 'USD',
-          status: 'ACTIVE',
-          main_location_id: 'test-location-' + Math.random().toString(36).substring(2, 10)
-        };
-      } else {
-        // Regular Square API exchange
-        tokenResponse = await squareService.exchangeCodeForToken(code, codeVerifier);
-        console.log('Token exchange successful. Response:', JSON.stringify(tokenResponse, null, 2));
-        
-        // Get merchant information using the access token
-        merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
-        console.log('Merchant info retrieved:', JSON.stringify(merchantInfo, null, 2));
-      }
-      
-      // Add merchant ID to the token response for the client
-      tokenResponse.merchant_id = merchantInfo.id;
-      
-      // Check if user with this merchant ID already exists
-      let user = await User.findBySquareMerchantId(merchantInfo.id);
-      let isNewUser = false;
-      
-      if (user) {
-        console.log('Existing user found with merchant ID:', merchantInfo.id);
-        // Update the user's Square credentials
-        user = await User.update(user.id, {
-          square_access_token: tokenResponse.access_token,
-          square_refresh_token: tokenResponse.refresh_token,
-          square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
-        });
-      } else {
-        isNewUser = true;
-        console.log('Creating new user with merchant ID:', merchantInfo.id);
-        // Create a new user
-        user = await User.create({
-          name: merchantInfo.business_name || merchantInfo.name,
-          email: merchantInfo.email || `merchant-${merchantInfo.id}@example.com`, // Fallback, ideally collect this separately
-          square_merchant_id: merchantInfo.id,
-          square_access_token: tokenResponse.access_token,
-          square_refresh_token: tokenResponse.refresh_token,
-          square_token_expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
-        });
-      }
-      
-      // Generate JWT for the user
-      const token = User.generateToken(user);
-      console.log('JWT token generated for user');
-      
-      // Add the JWT to the response for the mobile client
-      tokenResponse.jwt = token;
-      
-      // Log successful OAuth completion
-      await security.logOAuthActivity({
-        action: 'oauth_complete',
-        user_id: user.id,
-        merchant_id: merchantInfo.id,
-        is_new_user: isNewUser,
-        ip: req.ip,
-        user_agent: req.headers['user-agent'],
-        flow: isMobileFlow ? 'mobile' : 'web'
-      });
-      
-      // For mobile flow, return the tokens as JSON
-      if (isMobileFlow) {
-        console.log('Returning token response as JSON for mobile client');
-        return res.json(tokenResponse);
-      }
-      
-      // For web flow, redirect to success page
-      console.log('Redirecting to success page for web client');
-      res.redirect(`/api/auth/success?token=${token}`);
-    } catch (tokenError) {
-      console.error('Token exchange error:', tokenError);
-      console.error('Error details:', tokenError.stack);
-      throw tokenError;
-    }
   } catch (error) {
-    console.error('Error handling Square callback:', error);
-    console.error('Stack trace:', error.stack);
+    console.error('Error completing Square OAuth:', error);
     
-    // Log OAuth failure
-    await security.logOAuthActivity({
-      action: 'oauth_error',
-      error: error.message,
-      ip: req.ip,
-      user_agent: req.headers['user-agent'],
-      flow: req.method === 'POST' ? 'mobile' : 'web'
-    }, false);
-    
-    // For mobile flow, return JSON error
-    if (req.method === 'POST') {
-      return res.status(500).json({ error: 'Failed to complete OAuth flow', details: error.message });
+    // Detailed error message for debugging
+    if (process.env.NODE_ENV !== 'production') {
+      return res.status(500).json({ 
+        error: 'Failed to complete OAuth flow',
+        details: error.message,
+        stack: error.stack,
+        squareEnv: process.env.SQUARE_ENVIRONMENT,
+        redirectUrl: process.env.SQUARE_REDIRECT_URL
+      });
     }
     
-    // For web flow, show error page
-    res.status(500).json({ error: 'Failed to complete OAuth flow', details: error.message });
+    return res.status(500).json({ error: 'Failed to complete OAuth flow' });
   }
 }
 
@@ -575,41 +477,202 @@ async function revokeToken(req, res) {
  * This endpoint generates state and PKCE parameters and returns them to the mobile app
  */
 async function initMobileOAuth(req, res) {
+  console.log('Mobile OAuth initialized');
+  
   try {
-    // Generate state parameter
-    const state = squareService.generateStateParam();
+    // Generate a state parameter
+    const state = crypto.randomBytes(16).toString('hex');
+    console.log(`Mobile OAuth initialized with state: ${state}`);
     
-    // Generate PKCE code verifier and challenge
-    const codeVerifier = squareService.generateCodeVerifier();
-    const codeChallenge = squareService.generateCodeChallenge(codeVerifier);
+    // Generate a code verifier and challenge for PKCE
+    const codeVerifier = crypto.randomBytes(64).toString('hex');
+    const codeChallenge = crypto
+      .createHash('sha256')
+      .update(codeVerifier)
+      .digest('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
     
-    // Store values in database or session for later verification
-    // This is temporary - in production you might want to use DynamoDB or Redis
+    // Store the code verifier in the session
+    if (!req.session) {
+      req.session = {};
+    }
+    
     if (!req.session.oauthParams) {
       req.session.oauthParams = {};
     }
-    req.session.oauthParams[state] = { 
+    
+    req.session.oauthParams[state] = {
       codeVerifier,
-      createdAt: Date.now()
+      createdAt: new Date().toISOString()
     };
     
-    console.log('Mobile OAuth initialized with state:', state);
+    // Set a cookie with the state parameter for browsers
+    // This ensures that both API clients and browsers can work
+    res.cookie('square_oauth_state', state, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 3600000 // 1 hour
+    });
     
-    // Generate the authorization URL with the state parameter and code challenge
-    const authUrl = await squareService.getAuthorizationUrl(state, codeChallenge);
+    // Get the redirect URL from configuration
+    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback';
+    console.log(`Redirect URL for OAuth: ${redirectUrl}`);
     
-    // Return the parameters to the mobile app
+    // Create the authorization URL
+    console.log(`Using state parameter: ${state}`);
+    console.log('Using PKCE with code challenge');
+    
+    const authUrl = `https://connect.squareup.com/oauth2/authorize?client_id=${
+      process.env.SQUARE_APPLICATION_ID
+    }&scope=${
+      encodeURIComponent('ITEMS_READ ITEMS_WRITE INVENTORY_READ INVENTORY_WRITE MERCHANT_PROFILE_READ ORDERS_READ ORDERS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE')
+    }&response_type=code&redirect_uri=${
+      encodeURIComponent(redirectUrl)
+    }&state=${
+      state
+    }&code_challenge=${
+      codeChallenge
+    }&code_challenge_method=S256`;
+    
+    // Return the authorization URL as JSON
     res.json({
       authUrl,
       state,
-      codeVerifier,
-      codeChallenge
+      pkce: true
     });
   } catch (error) {
-    console.error('Error initializing mobile OAuth:', error);
-    res.status(500).json({ error: 'Failed to initialize OAuth' });
+    console.error('Error initiating mobile OAuth:', error);
+    res.status(500).json({
+      error: 'Failed to initiate OAuth process',
+      details: error.message
+    });
   }
 }
+
+/**
+ * Generate a JWT token for a user
+ */
+function generateToken(user) {
+  console.log('Generating token for user:', user.id);
+  
+  const jwt = require('jsonwebtoken');
+  const JWT_SECRET = process.env.JWT_SECRET || 'testing123';
+  const JWT_EXPIRATION = process.env.JWT_EXPIRATION || '7d';
+  
+  // Create the payload with user information (never include sensitive data)
+  const payload = {
+    sub: user.id,
+    merchantId: user.square_merchant_id,
+    name: user.name,
+    email: user.email,
+    iat: Math.floor(Date.now() / 1000)
+  };
+  
+  // Generate the token
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRATION });
+}
+
+exports.showTestPage = (req, res) => {
+  try {
+    const appId = process.env.SQUARE_APPLICATION_ID;
+    const environment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
+    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'http://localhost:3001/api/auth/square/callback';
+    
+    // Mask sensitive data for display
+    const maskedAppId = appId ? `${appId.substring(0, 4)}...${appId.substring(appId.length - 4)}` : 'Not configured';
+    const secretConfigured = process.env.SQUARE_APPLICATION_SECRET ? 'Configured ✅' : 'Not configured ❌';
+    
+    console.log('Square OAuth test tool accessed');
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Square OAuth Test</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }
+          h1 { color: #4A154B; }
+          h2 { color: #4A154B; margin-top: 30px; }
+          .card { border: 1px solid #ddd; border-radius: 4px; padding: 20px; margin-bottom: 20px; background: #f9f9f9; }
+          .btn { display: inline-block; background: #4A154B; color: white; padding: 10px 15px; text-decoration: none; border-radius: 4px; margin-top: 10px; }
+          .btn:hover { background: #611f64; }
+          .error { color: #D40E0D; }
+          .success { color: #008000; }
+          table { width: 100%; border-collapse: collapse; }
+          table, th, td { border: 1px solid #ddd; }
+          th, td { padding: 8px; text-align: left; }
+          th { background-color: #f2f2f2; }
+          pre { background: #f4f4f4; padding: 10px; overflow: auto; }
+          code { font-family: monospace; }
+          .test-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <h1>Square OAuth Test Tool</h1>
+        
+        <div class="card">
+          <h2>Environment Configuration</h2>
+          <table>
+            <tr>
+              <th>Setting</th>
+              <th>Value</th>
+            </tr>
+            <tr>
+              <td>Environment</td>
+              <td>${environment}</td>
+            </tr>
+            <tr>
+              <td>Application ID</td>
+              <td>${maskedAppId}</td>
+            </tr>
+            <tr>
+              <td>Application Secret</td>
+              <td>${secretConfigured}</td>
+            </tr>
+            <tr>
+              <td>Redirect URL</td>
+              <td>${redirectUrl}</td>
+            </tr>
+          </table>
+        </div>
+        
+        <div class="card">
+          <h2>Test OAuth Flow</h2>
+          <p>Click the button below to test the full OAuth flow:</p>
+          <a href="/api/auth/square?state=test-state-parameter" class="btn">Start OAuth Flow</a>
+          
+          <div class="test-actions">
+            <a href="/api/auth/square/mobile-init" class="btn" target="_blank">Test Mobile Init</a>
+            <a href="/api/auth/square/set-test-cookie" class="btn">Set Test Cookies</a>
+          </div>
+        </div>
+        
+        <div class="card">
+          <h2>Test Security</h2>
+          <p>Use this test callback for local testing:</p>
+          <a href="/api/auth/square/test-callback" class="btn">Test Callback Locally</a>
+        </div>
+        
+        <div class="card">
+          <h2>Documentation</h2>
+          <p>For more information, see the Square OAuth documentation:</p>
+          <ul>
+            <li><a href="https://developer.squareup.com/docs/oauth-api/overview" target="_blank">Square OAuth API Overview</a></li>
+            <li><a href="https://developer.squareup.com/docs/oauth-api/testing" target="_blank">Testing Square OAuth</a></li>
+          </ul>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error showing test page:', error);
+    res.status(500).json({ error: 'Failed to load test page' });
+  }
+};
 
 // Export the controller functions
 module.exports = {

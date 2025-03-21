@@ -8,16 +8,16 @@ provider:
   stage: ${opt:stage, 'dev'}
   region: ${opt:region, 'us-west-1'}
   environment:
-    NODE_ENV: ${self:provider.stage}
+    NODE_ENV: ${opt:stage, 'dev'}
     PRODUCTS_TABLE: joylabs-catalog-products-${self:provider.stage}
     CATEGORIES_TABLE: joylabs-catalog-categories-${self:provider.stage}
-    USERS_TABLE: joylabs-catalog-users-${self:provider.stage}
-    WEBHOOKS_TABLE: joylabs-webhooks-${self:provider.stage}
-    JWT_SECRET: ${env:JWT_SECRET, 'default-secret-key-for-dev-only'}
-    SQUARE_APPLICATION_ID: 'sq0idp-WFTYv3An7NPv6ovGFLld1Q'
-    SQUARE_APPLICATION_SECRET: 'sq0csp-z8vgtFYXtjEbXMGW9fjSgw9KsMLzJpoc7RrCCPoLdE4'
-    SQUARE_ENVIRONMENT: 'production'
-    SQUARE_SECRETS_ARN: !Ref SquareCredentialsSecret
+    USERS_TABLE: ${env:USERS_TABLE, 'joylabs-catalog-users-${self:provider.stage}'}
+    WEBHOOKS_TABLE: joylabs-catalog-webhooks-${self:provider.stage}
+    JWT_SECRET: ${env:JWT_SECRET, ''}
+    SQUARE_APPLICATION_ID: ${env:SQUARE_APPLICATION_ID, ''}
+    SQUARE_APPLICATION_SECRET: ${env:SQUARE_APPLICATION_SECRET, ''}
+    SQUARE_ENVIRONMENT: ${env:SQUARE_ENVIRONMENT, 'production'}
+    SQUARE_REDIRECT_URL: ${env:SQUARE_REDIRECT_URL, 'http://localhost:3001/api/auth/square/callback'}
     API_BASE_URL: ${env:API_BASE_URL, 'http://localhost:3001'}
     API_PROD_URL: https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/${self:provider.stage}
   iamRoleStatements:

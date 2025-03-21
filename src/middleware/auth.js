@@ -113,8 +113,36 @@ async function refreshSquareTokenIfNeeded(req, res, next) {
   }
 }
 
+const authenticate = (req, res, next) => {
+  try {
+    // Get token from Authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Add user info to request
+    req.user = decoded;
+    
+    // For test tokens, add square_access_token
+    if (decoded.merchant_id === 'TEST_MERCHANT_123') {
+      req.user.square_access_token = 'TEST_ACCESS_TOKEN_123';
+    }
+    
+    next();
+  } catch (error) {
+    console.error('Auth error:', error);
+    res.status(401).json({ error: 'Unauthorized - Invalid token' });
+  }
+};
+
 module.exports = {
   protect,
   refreshSquareTokenIfNeeded,
-  authenticate: protect
+  authenticate
 }; 
