@@ -34,3 +34,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp 
+
+# Guide for setting up Lambda
+Square OAuth Integration with AWS Lambda.md.expo/

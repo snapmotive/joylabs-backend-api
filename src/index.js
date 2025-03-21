@@ -12,20 +12,23 @@ const configureCors = require('./middleware/cors');
 // Initialize express app
 const app = express();
 
-// Configure DynamoDB session store
-const dynamoDb = process.env.IS_OFFLINE === 'true'
-  ? new AWS.DynamoDB({
-      region: 'localhost',
-      endpoint: 'http://localhost:8000'
-    })
-  : new AWS.DynamoDB();
-
-const sessionStore = new DynamoDBStore({
-  table: 'joylabs-sessions-' + process.env.NODE_ENV,
-  client: dynamoDb,
-  hashKey: 'id',
-  ttl: 24 * 60 * 60 // 1 day TTL
-});
+// Configure session store based on environment
+let sessionStore;
+if (process.env.IS_OFFLINE === 'true') {
+  console.log('Using memory session store for local development');
+  // Use memory store for local development
+  sessionStore = new session.MemoryStore();
+} else {
+  console.log('Using DynamoDB session store for production');
+  // Configure DynamoDB session store for production
+  const dynamoDb = new AWS.DynamoDB();
+  sessionStore = new DynamoDBStore({
+    table: 'joylabs-sessions-' + process.env.NODE_ENV,
+    client: dynamoDb,
+    hashKey: 'id',
+    ttl: 24 * 60 * 60 // 1 day TTL
+  });
+}
 
 // Apply CORS middleware with custom configuration
 app.use(cors({
