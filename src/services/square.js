@@ -477,6 +477,7 @@ function createMockMerchantInfo(merchantId = null) {
 
 // Export functions
 module.exports = {
+  getSquareCredentials,
   generateOAuthUrl,
   exchangeCodeForToken,
   refreshToken,

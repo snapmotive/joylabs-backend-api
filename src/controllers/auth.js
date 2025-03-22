@@ -89,6 +89,15 @@ const validateAndConsumeState = async (state) => {
  */
 async function startSquareOAuth(req, res) {
   try {
+    // Get Square credentials
+    const credentials = await squareService.getSquareCredentials();
+    
+    if (!credentials || !credentials.applicationId) {
+      throw new Error('Failed to get Square application ID');
+    }
+    
+    console.log('Using Square Application ID:', credentials.applicationId);
+    
     const state = req.query.state || await generateStateParam();
     console.log('Generated state parameter:', state);
     
@@ -114,14 +123,16 @@ async function startSquareOAuth(req, res) {
     // Create the authorization URL
     console.log(`Using state parameter: ${state}`);
     const authUrl = `https://connect.squareup.com/oauth2/authorize?client_id=${
-      process.env.SQUARE_APPLICATION_ID
+      credentials.applicationId
     }&scope=${
       encodeURIComponent('ITEMS_READ ITEMS_WRITE INVENTORY_READ INVENTORY_WRITE MERCHANT_PROFILE_READ ORDERS_READ ORDERS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE')
     }&response_type=code&redirect_uri=${
       encodeURIComponent(redirectUrl)
     }&state=${state}`;
     
-    console.log(`Redirecting to OAuth URL: ${authUrl}`);
+    // Log the generated URL (with truncated values for security)
+    const logUrl = authUrl.replace(credentials.applicationId, credentials.applicationId.substring(0, 10) + '...');
+    console.log(`Redirecting to OAuth URL: ${logUrl}`);
     
     // Redirect to the authorization URL
     res.redirect(authUrl);
@@ -459,6 +470,16 @@ async function initMobileOAuth(req, res) {
   console.log('Mobile OAuth initialized');
   
   try {
+    // Get Square credentials first
+    const squareService = require('../services/square');
+    const credentials = await squareService.getSquareCredentials();
+    
+    if (!credentials || !credentials.applicationId) {
+      throw new Error('Failed to get Square application ID');
+    }
+    
+    console.log('Using Square Application ID:', credentials.applicationId);
+    
     // Generate a state parameter
     const state = crypto.randomBytes(16).toString('hex');
     console.log(`Mobile OAuth initialized with state: ${state}`);
@@ -505,7 +526,7 @@ async function initMobileOAuth(req, res) {
     console.log('Using PKCE with code challenge');
     
     const authUrl = `https://connect.squareup.com/oauth2/authorize?client_id=${
-      process.env.SQUARE_APPLICATION_ID
+      credentials.applicationId
     }&scope=${
       encodeURIComponent('ITEMS_READ ITEMS_WRITE INVENTORY_READ INVENTORY_WRITE MERCHANT_PROFILE_READ ORDERS_READ ORDERS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE')
     }&response_type=code&redirect_uri=${
@@ -516,10 +537,15 @@ async function initMobileOAuth(req, res) {
       codeChallenge
     }&code_challenge_method=S256`;
     
+    // Log the generated URL (with truncated values for security)
+    const logUrl = authUrl.replace(credentials.applicationId, credentials.applicationId.substring(0, 10) + '...');
+    console.log('Generated auth URL:', logUrl);
+    
     // Return the authorization URL as JSON
     res.json({
       authUrl,
       state,
+      codeVerifier, // Only for testing - remove in production
       pkce: true
     });
   } catch (error) {
