@@ -1,0 +1,22 @@
+{
+  "name": "joylabs-dependencies-layer",
+  "version": "1.0.0",
+  "description": "Common dependencies for JoyLabs backend",
+  "dependencies": {
+    "aws-sdk": "^2.1499.0",
+    "axios": "^1.8.4",
+    "buffer": "^6.0.3",
+    "connect-dynamodb": "^3.0.5",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.18.2",
+    "express-session": "^1.18.1",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "serverless-http": "^3.2.0",
+    "uuid": "^9.0.1"
+  }
+} 

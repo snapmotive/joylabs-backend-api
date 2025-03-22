@@ -6,16 +6,34 @@ const jwt = require('jsonwebtoken');
 const useMockData = process.env.ENABLE_MOCK_DATA === 'true' || process.env.NODE_ENV !== 'production';
 const mockUsers = {};
 
-// Initialize DynamoDB client
-let dynamoDb;
-if (process.env.IS_OFFLINE === 'true') {
-  dynamoDb = new AWS.DynamoDB.DocumentClient({
-    region: 'localhost',
-    endpoint: 'http://localhost:8000'
-  });
-} else {
-  dynamoDb = new AWS.DynamoDB.DocumentClient();
-}
+// Cache for DynamoDB client to enable connection reuse
+let dynamoDbClient = null;
+
+// Initialize DynamoDB client with connection reuse
+const getDynamoDbClient = () => {
+  if (dynamoDbClient) {
+    return dynamoDbClient;
+  }
+
+  if (process.env.IS_OFFLINE === 'true') {
+    dynamoDbClient = new AWS.DynamoDB.DocumentClient({
+      region: 'localhost',
+      endpoint: 'http://localhost:8000',
+      maxRetries: 3
+    });
+  } else {
+    // Configure the DocumentClient with optimal settings
+    dynamoDbClient = new AWS.DynamoDB.DocumentClient({
+      maxRetries: 3,
+      httpOptions: {
+        connectTimeout: 1000, // 1 second connection timeout
+        timeout: 5000 // 5 second timeout for operations
+      }
+    });
+  }
+  
+  return dynamoDbClient;
+};
 
 // User model
 const User = {
@@ -33,13 +51,15 @@ const User = {
         throw new Error('USERS_TABLE environment variable is not set');
       }
 
+      const dynamoDb = getDynamoDbClient();
       const params = {
         TableName: process.env.USERS_TABLE,
         IndexName: 'SquareMerchantIndex',
         KeyConditionExpression: 'square_merchant_id = :merchantId',
         ExpressionAttributeValues: {
           ':merchantId': merchantId
-        }
+        },
+        ConsistentRead: false // Using eventually consistent reads for GSI (faster and cheaper)
       };
       
       console.log('Querying DynamoDB with params:', JSON.stringify(params, null, 2));
@@ -55,6 +75,14 @@ const User = {
       return null;
     } catch (error) {
       console.error('Error finding user by Square merchant ID:', error);
+      
+      // Adding better error handling with classification
+      if (error.code === 'ProvisionedThroughputExceededException') {
+        console.error('DynamoDB throughput exceeded. Consider implementing backoff strategy or increasing capacity.');
+      } else if (error.code === 'ResourceNotFoundException') {
+        console.error('DynamoDB table or index not found. Check if table exists and GSI is active.');
+      }
+      
       throw error;
     }
   },
@@ -70,6 +98,7 @@ const User = {
         throw new Error('USERS_TABLE environment variable is not set');
       }
 
+      const dynamoDb = getDynamoDbClient();
       const timestamp = new Date().toISOString();
       const userId = userData.id || `user-${uuidv4()}`;
 
@@ -82,7 +111,9 @@ const User = {
         square_refresh_token: userData.square_refresh_token,
         square_token_expires_at: userData.square_token_expires_at,
         created_at: timestamp,
-        updated_at: timestamp
+        updated_at: timestamp,
+        ttl: process.env.DYNAMODB_TTL_ENABLED === 'true' ? 
+          Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60) : undefined // 1 year TTL if enabled
       };
 
       const params = {
@@ -106,6 +137,12 @@ const User = {
       return item;
     } catch (error) {
       console.error('Error creating user:', error);
+      
+      // Improved error handling
+      if (error.code === 'ConditionalCheckFailedException') {
+        console.error('User already exists with this ID. Consider using update operation instead.');
+      }
+      
       throw error;
     }
   },
@@ -121,6 +158,7 @@ const User = {
         throw new Error('USERS_TABLE environment variable is not set');
       }
 
+      const dynamoDb = getDynamoDbClient();
       const timestamp = new Date().toISOString();
       
       // Build update expression and attribute values
@@ -149,7 +187,9 @@ const User = {
         UpdateExpression: `SET ${updateExpressions.join(', ')}`,
         ExpressionAttributeNames: expressionAttributeNames,
         ExpressionAttributeValues: expressionAttributeValues,
-        ReturnValues: 'ALL_NEW'
+        ReturnValues: 'ALL_NEW',
+        // Conditional update to ensure the item exists
+        ConditionExpression: 'attribute_exists(id)'
       };
 
       console.log('Updating user with params:', JSON.stringify({
@@ -167,6 +207,14 @@ const User = {
       return result.Attributes;
     } catch (error) {
       console.error('Error updating user:', error);
+      
+      // Improved error handling with retry logic suggestion
+      if (error.code === 'ConditionalCheckFailedException') {
+        console.error('User does not exist. Cannot update non-existent user:', userId);
+      } else if (error.code === 'ProvisionedThroughputExceededException') {
+        console.error('DynamoDB throughput exceeded during update. Consider implementing exponential backoff.');
+      }
+      
       throw error;
     }
   },
@@ -189,7 +237,8 @@ const User = {
       sub: id,
       name: user.name,
       email: user.email,
-      merchant_id: user.square_merchant_id
+      merchant_id: user.square_merchant_id,
+      iat: Math.floor(Date.now() / 1000)
     };
     
     // Sign token with secret or use a default for development

@@ -4,23 +4,65 @@ const crypto = require('crypto');
 const AWS = require('aws-sdk');
 const { Client, Environment } = require('square');
 
-// AWS Secrets Manager client
-const secretsManager = new AWS.SecretsManager();
+// AWS Secrets Manager client with connection reuse
+let secretsManagerClient = null;
+const getSecretsManager = () => {
+  if (!secretsManagerClient) {
+    secretsManagerClient = new AWS.SecretsManager({
+      maxRetries: 3,
+      httpOptions: {
+        connectTimeout: 1000,
+        timeout: 3000
+      }
+    });
+  }
+  return secretsManagerClient;
+};
 
-// Cache for Square credentials
+// Cache for Square credentials and clients
 let squareCredentials = null;
+const squareClientCache = new Map();
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
+const CREDENTIALS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours for credentials
+
+/**
+ * Cache wrapper for frequently used functions
+ */
+function withCache(fn, cacheKey, ttl = CACHE_TTL) {
+  const cache = new Map();
+  
+  return async (...args) => {
+    const key = `${cacheKey}:${JSON.stringify(args)}`;
+    const now = Date.now();
+    
+    if (cache.has(key)) {
+      const { value, expires } = cache.get(key);
+      if (now < expires) {
+        console.log(`Cache hit for ${cacheKey}`);
+        return value;
+      }
+      console.log(`Cache expired for ${cacheKey}`);
+      cache.delete(key);
+    }
+    
+    const result = await fn(...args);
+    cache.set(key, {
+      value: result,
+      expires: now + ttl
+    });
+    
+    return result;
+  };
+}
 
 /**
  * Get Square credentials from AWS Secrets Manager or environment variables
  */
 const getSquareCredentials = async () => {
-  // Clear cache for development
-  if (process.env.IS_OFFLINE || process.env.NODE_ENV === 'development') {
-    squareCredentials = null;
-  }
-  
-  // Return cached credentials if available
-  if (squareCredentials) {
+  // Early return for cached credentials if not expired
+  if (squareCredentials && squareCredentials.cachedAt && 
+      (Date.now() - squareCredentials.cachedAt) < CREDENTIALS_CACHE_TTL) {
+    console.log('Using cached Square credentials');
     return squareCredentials;
   }
   
@@ -32,12 +74,15 @@ const getSquareCredentials = async () => {
       squareCredentials = {
         applicationId: process.env.SQUARE_APPLICATION_ID,
         applicationSecret: process.env.SQUARE_APPLICATION_SECRET,
-        environment: process.env.SQUARE_ENVIRONMENT || 'sandbox'
+        webhookSignatureKey: process.env.SQUARE_WEBHOOK_SIGNATURE_KEY,
+        environment: process.env.SQUARE_ENVIRONMENT || 'sandbox',
+        cachedAt: Date.now()
       };
       
       console.log('Loaded credentials:', {
         environment: squareCredentials.environment,
-        applicationId: squareCredentials.applicationId
+        applicationId: squareCredentials.applicationId,
+        hasWebhookKey: !!squareCredentials.webhookSignatureKey
       });
       
       return squareCredentials;
@@ -50,6 +95,7 @@ const getSquareCredentials = async () => {
     }
 
     console.log('Fetching Square credentials from Secrets Manager with secret ID:', secretId);
+    const secretsManager = getSecretsManager();
     const data = await secretsManager.getSecretValue({ SecretId: secretId }).promise();
     
     if (!data.SecretString) {
@@ -69,12 +115,14 @@ const getSquareCredentials = async () => {
     console.log('Secret data structure:', {
       hasApplicationId: !!secretData.applicationId || !!secretData.SQUARE_APPLICATION_ID,
       hasApplicationSecret: !!secretData.applicationSecret || !!secretData.SQUARE_APPLICATION_SECRET,
+      hasWebhookSignatureKey: !!secretData.webhookSignatureKey || !!secretData.SQUARE_WEBHOOK_SIGNATURE_KEY,
       availableKeys: Object.keys(secretData)
     });
     
     // Try different possible key names
     const applicationId = secretData.applicationId || secretData.SQUARE_APPLICATION_ID;
     const applicationSecret = secretData.applicationSecret || secretData.SQUARE_APPLICATION_SECRET;
+    const webhookSignatureKey = secretData.webhookSignatureKey || secretData.SQUARE_WEBHOOK_SIGNATURE_KEY || process.env.SQUARE_WEBHOOK_SIGNATURE_KEY;
     
     if (!applicationId || !applicationSecret) {
       throw new Error(`Invalid secret format: missing required fields. Available keys: ${Object.keys(secretData).join(', ')}`);
@@ -83,10 +131,13 @@ const getSquareCredentials = async () => {
     squareCredentials = {
       applicationId,
       applicationSecret,
-      environment: process.env.SQUARE_ENVIRONMENT || 'production'
+      webhookSignatureKey,
+      environment: process.env.SQUARE_ENVIRONMENT || 'production',
+      cachedAt: Date.now()
     };
     
     console.log('Successfully loaded credentials from Secrets Manager with application ID:', squareCredentials.applicationId);
+    console.log('Webhook signature key:', webhookSignatureKey ? 'present' : 'missing');
     
     // Validate the credentials format
     if (squareCredentials.applicationId.startsWith('sq0idp-') && 
@@ -97,22 +148,49 @@ const getSquareCredentials = async () => {
     }
   } catch (error) {
     console.error('Error fetching Square credentials:', error);
+    
+    // Add reusable error handling with specific actions for different error types
+    if (error.code === 'ResourceNotFoundException') {
+      console.error('Secret not found. Verify secret name and AWS region.');
+    } else if (error.code === 'AccessDeniedException') {
+      console.error('Permissions issue. Check IAM role has secretsmanager:GetSecretValue permission.');
+    } else if (error.code === 'ThrottlingException') {
+      console.error('Rate limited by AWS. Implement exponential backoff retry.');
+    } else if (error.code === 'InternalServiceError') {
+      console.error('AWS Secrets Manager service issue. Try again later.');
+    }
+    
+    // Re-throw for caller to handle
     throw error;
   }
 };
 
 /**
- * Get a configured Square API client
+ * Get a configured Square API client with connection reuse
  */
 const getSquareClient = (accessToken = null) => {
   const environment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
+  
+  // Use cache to avoid creating multiple clients with the same token
+  const cacheKey = `${accessToken || 'default'}-${environment}`;
+  
+  if (squareClientCache.has(cacheKey)) {
+    console.log('Reusing existing Square client from cache');
+    return squareClientCache.get(cacheKey);
+  }
+  
+  console.log('Creating new Square client with environment:', environment);
   const client = new Client({
     accessToken: accessToken || process.env.SQUARE_ACCESS_TOKEN,
     environment: environment,
-    userAgentDetail: 'JoyLabs Backend API'
+    userAgentDetail: 'JoyLabs Backend API',
+    timeout: 10000, // 10 second timeout for all requests
+    numberOfRetries: 3, // Retry failed requests
   });
   
-  console.log('Created Square client with environment:', environment);
+  // Cache the client for reuse
+  squareClientCache.set(cacheKey, client);
+  
   return client;
 };
 
@@ -159,7 +237,7 @@ function generateRandomString(length = 32) {
 const getRedirectUrl = () => {
   // In production, always use the API Gateway URL
   if (process.env.SQUARE_ENVIRONMENT === 'production') {
-    return `https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback`;
+    return `https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback`;
   }
   // For other environments, use the configured redirect URL
   return process.env.SQUARE_REDIRECT_URL;
@@ -420,18 +498,22 @@ const testSquareConnection = async (accessToken) => {
 };
 
 /**
- * Get merchant information from Square
+ * Wrap merchant info function with caching
  */
-const getMerchantInfo = async (accessToken) => {
-  console.log('Getting merchant information from Square');
-  
-  const result = await testSquareConnection(accessToken);
-  if (!result.success) {
-    throw new Error('Failed to get merchant information');
+const getMerchantInfoWithCache = withCache(async (accessToken, merchantId = null) => {
+  try {
+    const client = getSquareClient(accessToken);
+    const response = await client.merchantsApi.retrieveMerchant(merchantId || 'me');
+    console.log('Successfully retrieved merchant info');
+    return response.result.merchant;
+  } catch (error) {
+    console.error('Error getting merchant info:', error);
+    throw error;
   }
-  
-  return result.merchant;
-};
+}, 'merchantInfo', 30 * 60 * 1000); // 30 minute cache for merchant info
+
+// Export cached version
+const getMerchantInfo = getMerchantInfoWithCache;
 
 /**
  * Create a mock token response for testing
@@ -475,20 +557,164 @@ function createMockMerchantInfo(merchantId = null) {
   };
 }
 
-// Export functions
+// Add helper function for optimized token refresh with retries and backoff
+async function refreshTokenWithRetry(refreshToken, maxRetries = 3) {
+  let retries = 0;
+  let lastError = null;
+  
+  while (retries < maxRetries) {
+    try {
+      console.log(`Attempting to refresh token (attempt ${retries + 1}/${maxRetries})`);
+      return await refreshToken(refreshToken);
+    } catch (error) {
+      lastError = error;
+      console.error(`Token refresh failed (attempt ${retries + 1}/${maxRetries}):`, error.message);
+      
+      // Check if error is retryable
+      if (error.status && error.status >= 500) {
+        // Server error, can retry
+        retries++;
+        const delay = Math.pow(2, retries) * 1000; // Exponential backoff
+        console.log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else if (error.status === 429) {
+        // Rate limited, wait longer
+        retries++;
+        const delay = Math.pow(2, retries) * 2000; // Longer exponential backoff
+        console.log(`Rate limited. Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        // Client error, don't retry
+        throw error;
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+// Add function to handle connection pooling for axios
+const getAxiosInstance = () => {
+  return axios.create({
+    timeout: 10000,
+    maxRedirects: 5,
+    httpAgent: new require('http').Agent({ keepAlive: true }),
+    httpsAgent: new require('https').Agent({ keepAlive: true })
+  });
+};
+
+/**
+ * Verify Square webhook signature
+ * @param {string} signature - The Square-Signature header value
+ * @param {string} body - The raw request body as a string
+ * @returns {boolean} - Whether the signature is valid
+ */
+async function verifyWebhookSignature(signature, body) {
+  try {
+    if (!signature || !body) {
+      console.warn('Missing signature or body for webhook verification');
+      console.warn(`Signature: ${signature ? 'present' : 'missing'}, Body: ${body ? 'present' : 'missing'}`);
+      return false;
+    }
+
+    // Get Square webhook signature key from credentials or env
+    const credentials = await getSquareCredentials();
+    const signatureKey = credentials.webhookSignatureKey;
+    
+    if (!signatureKey) {
+      console.error('Webhook signature key is not configured');
+      console.error('Please set the SQUARE_WEBHOOK_SIGNATURE_KEY environment variable');
+      console.error('This can be found in the Square Developer Dashboard > Webhooks > Signature Key');
+      return false;
+    }
+
+    console.log('Verifying webhook signature with key:', signatureKey.substring(0, 4) + '...');
+
+    // Parse the signature header
+    // Format: t=timestamp,v1=signature
+    const signatureParts = signature.split(',');
+    
+    console.log('Signature parts:', JSON.stringify(signatureParts));
+    
+    if (signatureParts.length < 2) {
+      console.warn('Invalid signature format: not enough parts');
+      console.warn('Expected format: t=timestamp,v1=signature');
+      console.warn('Received:', signature);
+      return false;
+    }
+    
+    const timestampPart = signatureParts[0];
+    const signaturePart = signatureParts[1];
+    
+    if (!timestampPart || !signaturePart) {
+      console.warn('Invalid signature format: missing parts');
+      console.warn(`Timestamp part: ${timestampPart || 'missing'}`);
+      console.warn(`Signature part: ${signaturePart || 'missing'}`);
+      return false;
+    }
+    
+    const timestamp = timestampPart.split('=')[1];
+    const signatureValue = signaturePart.split('=')[1];
+    
+    if (!timestamp || !signatureValue) {
+      console.warn('Missing timestamp or signature value');
+      console.warn(`Timestamp: ${timestamp || 'missing'}`);
+      console.warn(`Signature value: ${signatureValue || 'missing'}`);
+      return false;
+    }
+    
+    // Construct the string to sign
+    const stringToSign = `${timestamp}.${body}`;
+    console.log('String to sign starts with:', stringToSign.substring(0, 20) + '...');
+    
+    // Generate HMAC-SHA256
+    const hmac = crypto.createHmac('sha256', signatureKey);
+    hmac.update(stringToSign);
+    const computedSignature = hmac.digest('hex');
+    
+    console.log('Computed signature starts with:', computedSignature.substring(0, 8) + '...');
+    console.log('Received signature starts with:', signatureValue.substring(0, 8) + '...');
+
+    try {
+      // Compare signatures (use a constant-time comparison to prevent timing attacks)
+      const isValid = crypto.timingSafeEqual(
+        Buffer.from(computedSignature, 'hex'),
+        Buffer.from(signatureValue, 'hex')
+      );
+      
+      console.log('Signature verification result:', isValid ? 'valid ✅' : 'invalid ❌');
+      return isValid;
+    } catch (comparisonError) {
+      console.error('Error comparing signatures:', comparisonError.message);
+      console.error('This might indicate that the signature formats are incompatible');
+      console.error('Computed signature length:', computedSignature.length);
+      console.error('Received signature length:', signatureValue.length);
+      return false;
+    }
+  } catch (error) {
+    console.error('Error verifying webhook signature:', error);
+    console.error('Stack trace:', error.stack);
+    return false;
+  }
+}
+
+// Export with more descriptive names
 module.exports = {
   getSquareCredentials,
-  generateOAuthUrl,
-  exchangeCodeForToken,
-  refreshToken,
-  revokeToken,
-  getMerchantInfo,
   getSquareClient,
   generateStateParam,
   generateCodeVerifier,
   generateCodeChallenge,
-  generateRandomString,
+  getRedirectUrl,
+  generateOAuthUrl,
+  exchangeCodeForToken,
+  refreshToken,
+  refreshTokenWithRetry,
+  revokeToken,
+  testSquareConnection,
+  getMerchantInfo,
+  verifyWebhookSignature,
+  // Export for tests
   createMockTokenResponse,
-  createMockMerchantInfo,
-  testSquareConnection
+  createMockMerchantInfo
 };

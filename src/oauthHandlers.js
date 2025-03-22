@@ -1,239 +1,110 @@
-const serverless = require('serverless-http');
 const express = require('express');
+const serverless = require('serverless-http');
+const cors = require('cors');
 const cookieParser = require('cookie-parser');
-const { exchangeCodeForToken, getMerchantInfo } = require('./services/square');
-const User = require('./models/user');
-const jwt = require('jsonwebtoken');
+const morgan = require('morgan');
 
-// Create Express app for OAuth handlers
+// Import Square service
+const squareService = require('./services/square');
+const userService = require('./services/user');
+
+// Create express app for OAuth handler
 const app = express();
 
-// Middleware
-app.use(express.json());
+// Apply middleware
+app.use(cors({
+  origin: true,
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  maxAge: 86400 // Cache CORS preflight requests for 24 hours
+}));
+
+// Basic logging
+app.use(morgan('dev'));
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-/**
- * Handle OAuth success redirect
- */
-app.get('/auth/success', (req, res) => {
-  console.log('Handling OAuth success redirect');
-  const { token } = req.query;
-
-  if (!token) {
-    console.error('No token provided in success redirect');
-    return res.status(400).json({ error: 'No token provided' });
+// Square callback route
+app.get('/api/auth/square/callback', async (req, res) => {
+  try {
+    console.log('Received Square OAuth callback');
+    const { code } = req.query;
+    
+    if (!code) {
+      return res.status(400).json({ error: 'No authorization code provided' });
+    }
+    
+    // Exchange code for tokens
+    const tokenResponse = await squareService.getOAuthToken(code);
+    
+    if (!tokenResponse.success) {
+      console.error('OAuth token exchange failed:', tokenResponse.error);
+      return res.status(400).json({ error: 'Failed to exchange authorization code' });
+    }
+    
+    // Store merchant info
+    const { merchantId, accessToken, refreshToken, expiresAt } = tokenResponse.data;
+    
+    // Check if merchant already exists
+    const existingMerchant = await userService.getMerchantById(merchantId);
+    
+    if (existingMerchant) {
+      // Update existing merchant
+      await userService.updateMerchantTokens(merchantId, accessToken, refreshToken, expiresAt);
+      console.log(`Updated tokens for existing merchant: ${merchantId}`);
+    } else {
+      // Create new merchant record
+      await userService.createMerchant(merchantId, accessToken, refreshToken, expiresAt);
+      console.log(`Created new merchant: ${merchantId}`);
+    }
+    
+    // Redirect to success page
+    return res.redirect('/auth/success?merchant_id=' + merchantId);
+  } catch (error) {
+    console.error('Square callback error:', error);
+    res.status(500).json({ error: 'An error occurred during OAuth process' });
   }
+});
 
-  // In production, you would redirect to your frontend app with the token
-  // For now, we'll show a simple success page
-  const html = `
-    <!DOCTYPE html>
+// Success page
+app.get('/auth/success', (req, res) => {
+  const merchantId = req.query.merchant_id || 'Unknown';
+  res.send(`
     <html>
       <head>
-        <title>Square Connection Successful</title>
+        <title>Authorization Successful</title>
         <style>
           body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f7f7f7;
-          }
-          .container {
+            font-family: Arial, sans-serif;
             text-align: center;
-            padding: 2rem;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 50px;
+            background-color: #f5f5f5;
+          }
+          .success-container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             max-width: 500px;
-            width: 90%;
+            margin: 0 auto;
           }
           h1 {
-            color: #21a67a;
-            margin-bottom: 1rem;
-          }
-          p {
-            color: #666;
-            line-height: 1.5;
-          }
-          .token {
-            background: #f5f5f5;
-            padding: 1rem;
-            border-radius: 4px;
-            word-break: break-all;
-            font-family: monospace;
-            font-size: 0.9rem;
-            margin: 1rem 0;
-            color: #333;
-          }
-          .close-button {
-            background: #21a67a;
-            color: white;
-            border: none;
-            padding: 0.8rem 2rem;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 1rem;
-            margin-top: 1rem;
-          }
-          .close-button:hover {
-            background: #1a8561;
+            color: #28a745;
           }
         </style>
       </head>
       <body>
-        <div class="container">
-          <h1>Square Connection Successful! 🎉</h1>
+        <div class="success-container">
+          <h1>Authorization Successful!</h1>
           <p>Your Square account has been successfully connected.</p>
-          <p>Your access token:</p>
-          <div class="token">${token}</div>
-          <p>Please save this token securely. You'll need it for API calls.</p>
-          <button class="close-button" onclick="window.close()">Close Window</button>
+          <p>Merchant ID: ${merchantId}</p>
+          <p>You can now close this window and return to the app.</p>
         </div>
       </body>
     </html>
-  `;
-
-  res.send(html);
+  `);
 });
 
-/**
- * Handle Square OAuth callback
- */
-app.get('/api/auth/square/callback', async (req, res) => {
-  console.log('Handling Square OAuth callback');
-  console.log('Query parameters:', req.query);
-  console.log('Headers:', {
-    origin: req.headers.origin,
-    referer: req.headers.referer,
-    'user-agent': req.headers['user-agent']
-  });
-
-  try {
-    const { code, state } = req.query;
-
-    if (!code || !state) {
-      console.error('Missing required parameters:', { code: !!code, state: !!state });
-      return res.status(400).json({
-        error: 'Missing required parameters',
-        details: {
-          code: !code ? 'Missing authorization code' : undefined,
-          state: !state ? 'Missing state parameter' : undefined
-        }
-      });
-    }
-
-    // Exchange code for token
-    console.log('Exchanging authorization code for token');
-    let tokenResponse;
-    try {
-      tokenResponse = await exchangeCodeForToken(code);
-      console.log('Token exchange successful');
-    } catch (tokenError) {
-      console.error('Token exchange failed:', tokenError);
-      return res.status(401).json({
-        error: 'Failed to exchange authorization code',
-        type: tokenError.response?.data?.type || 'token_exchange_error'
-      });
-    }
-
-    // Get merchant information
-    console.log('Getting merchant information');
-    let merchantInfo;
-    try {
-      merchantInfo = await getMerchantInfo(tokenResponse.access_token, tokenResponse.merchant_id);
-      console.log('Merchant info retrieved:', {
-        business_name: merchantInfo.name,
-        merchant_id: tokenResponse.merchant_id
-      });
-    } catch (merchantError) {
-      console.error('Failed to get merchant info:', merchantError);
-      return res.status(500).json({
-        error: 'Failed to get merchant information',
-        type: 'merchant_info_error'
-      });
-    }
-
-    // Find or create user
-    console.log('Finding or creating user');
-    const userId = `user-${tokenResponse.merchant_id}`;
-    let user;
-    try {
-      user = await User.findBySquareMerchantId(tokenResponse.merchant_id);
-
-      if (!user) {
-        console.log('Creating new user for merchant:', tokenResponse.merchant_id);
-        user = await User.create({
-          id: userId,
-          name: merchantInfo.name || 'Square Merchant',
-          email: merchantInfo.email || `${tokenResponse.merchant_id}@example.com`,
-          square_merchant_id: tokenResponse.merchant_id,
-          square_access_token: tokenResponse.access_token,
-          square_refresh_token: tokenResponse.refresh_token,
-          square_token_expires_at: tokenResponse.expires_at
-        });
-        console.log('New user created:', user.id);
-      } else {
-        console.log('Found existing user:', user.id);
-        // Update user with new tokens
-        console.log('Updating user with new tokens');
-        await User.update(user.id, {
-          square_access_token: tokenResponse.access_token,
-          square_refresh_token: tokenResponse.refresh_token,
-          square_token_expires_at: tokenResponse.expires_at
-        });
-        console.log('User tokens updated successfully');
-      }
-    } catch (userError) {
-      console.error('User operation failed:', userError);
-      return res.status(500).json({
-        error: 'Failed to process user data',
-        type: 'user_operation_error'
-      });
-    }
-
-    // Generate JWT token
-    let token;
-    try {
-      if (!process.env.JWT_SECRET) {
-        throw new Error('JWT_SECRET is not configured');
-      }
-      token = jwt.sign({
-        sub: user.id,
-        name: user.name,
-        email: user.email,
-        merchant_id: tokenResponse.merchant_id
-      }, process.env.JWT_SECRET, {
-        expiresIn: '7d'
-      });
-    } catch (jwtError) {
-      console.error('JWT generation failed:', jwtError);
-      return res.status(500).json({
-        error: 'Failed to generate authentication token',
-        type: 'jwt_error'
-      });
-    }
-
-    // Redirect to success page with token
-    const redirectUrl = `${process.env.API_BASE_URL}/auth/success?token=${token}`;
-    console.log('Redirecting to success page:', redirectUrl);
-    res.redirect(redirectUrl);
-  } catch (error) {
-    console.error('Error in Square callback:', error);
-    console.error('Stack trace:', error.stack);
-    
-    // Send appropriate error response
-    res.status(500).json({
-      error: 'Failed to complete OAuth flow',
-      type: 'internal_error',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// Handler for the serverless function
+// Export Serverless handler
 exports.squareCallback = serverless(app); 

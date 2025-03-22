@@ -1,0 +1,16 @@
+{
+  "name": "joylabs-firebase",
+  "version": "1.0.0",
+  "description": "JoyLabs Firebase backend for Square integration",
+  "main": "index.js",
+  "scripts": {
+    "deploy": "firebase deploy",
+    "deploy:functions": "firebase deploy --only functions",
+    "start": "firebase emulators:start"
+  },
+  "author": "JoyLabs",
+  "license": "MIT",
+  "dependencies": {
+    "firebase-tools": "^12.8.1"
+  }
+} 

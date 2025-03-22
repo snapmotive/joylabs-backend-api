@@ -1,189 +1,189 @@
 # JoyLabs Backend API
 
-Serverless backend API for JoyLabs Catalogue App that integrates with Square.
+AWS Serverless backend API for JoyLabs Catalogue App with Square OAuth integration.
 
-## Features
+## Overview
 
-- Serverless architecture using AWS Lambda and API Gateway
-- DynamoDB for data storage
-- Square OAuth integration for catalog management
-- JWT authentication
-- Testing page for AWS and Square integration
+This project provides a serverless backend API for the JoyLabs mobile app, handling authentication, Square integration, and data management using AWS Lambda, API Gateway, and DynamoDB.
 
-## Prerequisites
+## Technology Stack
 
-- Node.js (v16+)
-- AWS CLI configured with appropriate permissions
-- Serverless Framework
-- Square Developer Account
+- **AWS Lambda** - Serverless compute service
+- **API Gateway** - API management and routing
+- **DynamoDB** - NoSQL database for persistent storage
+- **Serverless Framework** - Infrastructure as code for AWS deployment
+- **Express.js** - Web framework for the API
+- **Square SDK** - Integration with Square for payments and merchant data
 
-## Security Best Practices for Square OAuth
+## Getting Started
 
-This project follows security best practices for implementing Square OAuth:
+### Prerequisites
 
-### Backend Security Measures
-- **Secrets Management**: All Square credentials are stored in AWS Secrets Manager
-- **PKCE Support**: Implements PKCE for secure mobile authentication
-- **Token Refresh**: Proactive token refresh before expiration
-- **Token Revocation**: Secure OAuth token revocation endpoint
-- **Security Monitoring**: CloudWatch metrics for authentication events
+- Node.js (v18+)
+- npm
+- AWS CLI configured with appropriate credentials
+- Serverless Framework CLI
+- Square Developer account
 
-### API Gateway Security
-- **WAF Protection**: Web Application Firewall blocks common attacks
-- **Rate Limiting**: Prevents abuse with per-IP rate limits
-- **Geo-Blocking**: Blocks high-risk country access
-- **API Keys**: Protected endpoints with API key requirements
-
-### Mobile App Integration
-- See [Expo OAuth Example](docs/expo-oauth-example.md) for secure implementation
-
-## Setup
+### Installation
 
 1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/joylabs-backend.git
-cd joylabs-backend
-```
+   ```
+   git clone https://github.com/joylabs/joylabs-backend.git
+   cd joylabs-backend
+   ```
 
 2. Install dependencies:
-```bash
-npm install
-```
+   ```
+   npm install
+   ```
 
-3. Set up environment variables securely:
-```bash
-npm run setup-env
-```
+3. Set up environment variables:
+   ```
+   cp .env.example .env
+   ```
+   Edit the `.env` file with your configuration values.
 
-This will:
-- Create a `.env.template` file with placeholder values
-- Generate a `.env.local` file with a secure random JWT secret
-- Provide instructions for filling in your Square credentials
+4. Install the Serverless Framework:
+   ```
+   npm install -g serverless
+   ```
 
-## Square App Setup
+### Local Development
 
-1. Go to the [Square Developer Dashboard](https://developer.squareup.com/apps)
-2. Create a new application
-3. Set the following in your application settings:
-   - Application type: `Web` and `Mobile`
-   - OAuth Redirect URL: `http://localhost:5000/api/auth/square/callback` (for development)
-   - Permissions: 
-     - Items API (Read/Write)
-     - Merchant Profile (Read)
-     - Orders API (Read/Write)
-     - Inventory API (Read/Write)
+1. Start the local development server:
+   ```
+   npm run dev
+   ```
 
-4. Update your `.env.local` file with your application credentials (NEVER commit this file)
+2. Test the Square OAuth flow locally:
+   ```
+   npm run test:oauth
+   ```
 
-## Running Locally
+3. Run tests:
+   ```
+   npm test
+   ```
 
-1. Install DynamoDB local (if not already installed):
-```bash
-serverless dynamodb install
-```
+## Deployment
 
-2. Start the local development server:
-```bash
-npm run dev
-```
+### Deploy to AWS
 
-This will start:
-- API server on port 3001
-- Local DynamoDB on port 8000
+1. Configure your AWS credentials:
+   ```
+   aws configure
+   ```
 
-3. Visit the test page at http://localhost:3001/api/auth/square/test to verify your setup
+2. Deploy using the provided script:
+   ```
+   ./deploy-aws.sh
+   ```
 
-## AWS Deployment
+   Or manually with:
+   ```
+   npm run deploy:prod
+   ```
 
-1. Set up your secrets in AWS Secrets Manager:
-```bash
-node scripts/setup-aws-secrets.js
-```
+3. Update your Square Developer Console with the deployed callback URL.
 
-2. Make sure you have AWS credentials configured:
-```bash
-aws configure
-```
+## API Endpoints
 
-3. Deploy to AWS:
-```bash
-npm run deploy
-```
+### Authentication
 
-For production deployment:
-```bash
-npm run deploy:prod
-```
+- `GET /api/auth/square/init` - Initialize Square OAuth flow
+- `GET /api/auth/square/callback` - Handle Square OAuth callback
+- `GET /api/auth/square/mobile-init` - Initialize Square OAuth flow for mobile apps (with PKCE)
+- `GET /api/auth/square/mobile-callback` - Handle Square OAuth callback for mobile apps
 
-4. Update your Square application settings with the new API Gateway URL:
-   - OAuth Redirect URL: `https://your-api-id.execute-api.region.amazonaws.com/dev/api/auth/square/callback`
+### Square Webhooks
 
-## DynamoDB Structure
+- `POST /api/webhooks/square` - Handle Square webhook events
 
-The backend uses three DynamoDB tables:
+### Health Check
 
-### Products Table
-- Primary key: `id` (UUID)
-- GSI: `sku`, `barcode`
+- `GET /api/health` - API health check endpoint
 
-### Categories Table
-- Primary key: `id` (UUID)
-- GSI: `name`
+## Configuration
 
-### Users Table
-- Primary key: `id` (UUID)
-- GSI: `email`, `square_merchant_id`
+### Environment Variables
 
-## API Routes
+Key environment variables:
 
-### Auth
-- `GET /api/auth/square` - Start Square OAuth flow
-- `GET /api/auth/square/callback` - Square OAuth callback
-- `GET /api/auth/success` - Success page with token
-- `POST /api/auth/logout/:userId` - Revoke Square access token
+- `NODE_ENV` - Environment (development, production)
+- `STAGE` - Deployment stage (dev, production)
+- `SQUARE_ENVIRONMENT` - Square API environment (sandbox, production)
+- `SQUARE_APPLICATION_ID` - Square application ID
+- `SQUARE_REDIRECT_URL` - OAuth callback URL
+- `REGION` - AWS region
+- `USERS_TABLE` - DynamoDB table for users
+- `SESSIONS_TABLE` - DynamoDB table for sessions
+- `SQUARE_CREDENTIALS_SECRET` - AWS Secrets Manager secret name for Square credentials
+- `FRONTEND_URL` - Frontend application URL for redirects
+- `LOG_LEVEL` - Logging level
 
-### Products
-- `GET /api/products` - List products
-- `GET /api/products/:id` - Get product by ID
-- `POST /api/products` - Create product
-- `PUT /api/products/:id` - Update product
-- `DELETE /api/products/:id` - Delete product
+### AWS Resources
 
-### Categories
-- `GET /api/categories` - List categories
-- `GET /api/categories/:id` - Get category by ID
-- `POST /api/categories` - Create category
-- `PUT /api/categories/:id` - Update category
-- `DELETE /api/categories/:id` - Delete category
+The Serverless Framework automatically creates:
 
-### Health
-- `GET /api/health` - Basic health check
-- `GET /api/health/detailed` - Detailed health status
-- `GET /api/health/test-page` - Test page for Square OAuth and AWS
+- Lambda functions
+- API Gateway endpoints
+- DynamoDB tables
+- IAM roles and policies
+- CloudWatch Log Groups
+
+## Security
+
+- JWT authentication for protected endpoints
+- PKCE (Proof Key for Code Exchange) for mobile OAuth flow
+- AWS IAM for resource access control
+- Rate limiting on API endpoints
+- HTTPS for all communications
 
 ## Testing
 
 Run the test suite:
-```bash
+
+```
 npm test
 ```
 
-## Troubleshooting
-
-### Square OAuth
-If you're having issues with the Square OAuth flow:
-1. Verify your application settings in the Square Developer Dashboard
-2. Check that your redirect URLs are correct
-3. Make sure your API Base URL is set correctly in `.env`
-4. Visit the test page at `/test` and check all settings
-
-### AWS Deployment
-If you encounter AWS deployment issues:
-1. Check your AWS credentials
-2. Verify IAM permissions
-3. Look at CloudWatch logs for errors
-4. Ensure your environment variables are set correctly
-
 ## License
 
-MIT 
+Proprietary - All rights reserved
+
+## Architecture
+
+### Lambda Functions
+
+The backend is organized into three separate Lambda functions, each with its own specific responsibility:
+
+1. **API Function** - Handles all general API requests, routed through Express.
+2. **Square OAuth Callback Function** - Dedicated to handling Square OAuth callback requests.
+3. **Square Webhook Function** - Dedicated to processing webhook events from Square.
+
+### Lambda Layers
+
+To optimize the deployment package size and improve performance, the project uses Lambda Layers to separate dependencies:
+
+1. **Dependencies Layer** - Contains common dependencies like Express, AWS SDK, and utilities.
+2. **Square Layer** - Contains Square-specific dependencies, which can be quite large.
+
+This architecture provides several benefits:
+- Faster Lambda cold starts due to smaller deployment packages
+- Simplified dependency management
+- Better separation of concerns
+
+### Setting Up Layers
+
+To set up the Lambda layers locally, run:
+
+```
+npm run setup-layers
+```
+
+This will install all dependencies in the appropriate layer directories.
+
+---
+
+For more information, refer to the detailed documentation in the `docs/` directory. 

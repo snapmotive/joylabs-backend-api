@@ -1,0 +1,8 @@
+{
+  "name": "joylabs-square-layer",
+  "version": "1.0.0",
+  "description": "Square API dependencies for JoyLabs backend",
+  "dependencies": {
+    "square": "^33.0.0"
+  }
+} 

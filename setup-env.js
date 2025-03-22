@@ -18,12 +18,32 @@ if (!fs.existsSync(ENV_TEMPLATE_PATH)) {
 SQUARE_ENVIRONMENT=sandbox
 SQUARE_APPLICATION_ID=your_square_application_id
 SQUARE_APPLICATION_SECRET=your_square_application_secret
+SQUARE_WEBHOOK_SIGNATURE_KEY=your_square_webhook_signature_key
 SQUARE_REDIRECT_URL=http://localhost:3001/api/auth/square/callback
+
+# AWS Configuration
+REGION=us-west-1
+NODE_ENV=development
+IS_OFFLINE=true
+
+# API Configuration
+API_BASE_URL=http://localhost:3001
+
+# Secrets
+JWT_SECRET=random_jwt_secret_value
+SESSION_SECRET=random_session_secret_value
 
 # Testing configuration
 ENABLE_MOCK_DATA=true
-USERS_TABLE=users-dev
-JWT_SECRET=random_jwt_secret_value
+
+# Table names
+USERS_TABLE=joylabs-catalog-users-v3-dev
+SESSIONS_TABLE=joylabs-sessions-v3-dev
+PRODUCTS_TABLE=joylabs-catalog-products-v3-dev
+CATEGORIES_TABLE=joylabs-catalog-categories-v3-dev
+WEBHOOKS_TABLE=joylabs-catalog-webhooks-v3-dev
+MERCHANT_TABLE=joylabs-backend-api-merchants-v3-dev
+WEBHOOK_TABLE=joylabs-backend-api-webhooks-v3-dev
 
 # Frontend URL for redirects
 FRONTEND_URL=http://localhost:3000
@@ -36,17 +56,38 @@ FRONTEND_URL=http://localhost:3000
 // Check if local env file exists, create one with secure defaults if not
 if (!fs.existsSync(ENV_LOCAL_PATH)) {
   const jwtSecret = crypto.randomBytes(32).toString('hex');
+  const sessionSecret = crypto.randomBytes(32).toString('hex');
   
   const localContent = `# Square configuration - Local development overrides
 SQUARE_ENVIRONMENT=sandbox
 SQUARE_APPLICATION_ID=
 SQUARE_APPLICATION_SECRET=
+SQUARE_WEBHOOK_SIGNATURE_KEY=
 SQUARE_REDIRECT_URL=http://localhost:3001/api/auth/square/callback
+
+# AWS Configuration
+REGION=us-west-1
+NODE_ENV=development
+IS_OFFLINE=true
+
+# API Configuration
+API_BASE_URL=http://localhost:3001
+
+# Secrets
+JWT_SECRET=${jwtSecret}
+SESSION_SECRET=${sessionSecret}
 
 # Testing configuration
 ENABLE_MOCK_DATA=true
-USERS_TABLE=users-dev
-JWT_SECRET=${jwtSecret}
+
+# Table names
+USERS_TABLE=joylabs-catalog-users-v3-dev
+SESSIONS_TABLE=joylabs-sessions-v3-dev
+PRODUCTS_TABLE=joylabs-catalog-products-v3-dev
+CATEGORIES_TABLE=joylabs-catalog-categories-v3-dev
+WEBHOOKS_TABLE=joylabs-catalog-webhooks-v3-dev
+MERCHANT_TABLE=joylabs-backend-api-merchants-v3-dev
+WEBHOOK_TABLE=joylabs-backend-api-webhooks-v3-dev
 
 # Frontend URL for redirects
 FRONTEND_URL=http://localhost:3000
@@ -54,7 +95,7 @@ FRONTEND_URL=http://localhost:3000
 
   fs.writeFileSync(ENV_LOCAL_PATH, localContent);
   console.log(`✅ Created .env.local file with secure defaults at ${ENV_LOCAL_PATH}`);
-  console.log(`🔐 Generated a random JWT_SECRET for local development`);
+  console.log(`🔐 Generated random JWT_SECRET and SESSION_SECRET for local development`);
 }
 
 console.log(`\n⚠️  IMPORTANT SECURITY REMINDER ⚠️`);

@@ -117,7 +117,7 @@ async function startSquareOAuth(req, res) {
     }));
     
     // Get the redirect URL from configuration
-    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback';
+    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://ux8uq7hd24.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback';
     console.log(`Redirect URL for OAuth: ${redirectUrl}`);
     
     // Create the authorization URL
@@ -518,7 +518,7 @@ async function initMobileOAuth(req, res) {
     });
     
     // Get the redirect URL from configuration
-    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://012dp4dzhb.execute-api.us-west-1.amazonaws.com/dev/api/auth/square/callback';
+    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://ux8uq7hd24.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback';
     console.log(`Redirect URL for OAuth: ${redirectUrl}`);
     
     // Create the authorization URL
@@ -584,7 +584,7 @@ exports.showTestPage = (req, res) => {
   try {
     const appId = process.env.SQUARE_APPLICATION_ID;
     const environment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
-    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'http://localhost:3001/api/auth/square/callback';
+    const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://ux8uq7hd24.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback';
     
     // Mask sensitive data for display
     const maskedAppId = appId ? `${appId.substring(0, 4)}...${appId.substring(appId.length - 4)}` : 'Not configured';

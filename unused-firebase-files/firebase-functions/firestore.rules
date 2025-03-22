@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Function to check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Function to check if user is the owner of the merchant data
+    function isMerchantOwner(merchantId) {
+      return request.auth.uid == merchantId;
+    }
+    
+    // Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Square merchant tokens - only Cloud Functions can write, merchants can read their own data
+    match /square_tokens/{merchantId} {
+      allow read: if isAuthenticated() && isMerchantOwner(merchantId);
+      allow write: if false; // Only Cloud Functions can write
+    }
+    
+    // System logs - only Cloud Functions can write, admin can read
+    match /system_logs/{logId} {
+      allow read: if isAuthenticated() && request.auth.token.admin == true;
+      allow write: if false; // Only Cloud Functions can write
+    }
+  }
+} 
