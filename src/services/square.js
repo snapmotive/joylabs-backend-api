@@ -3,53 +3,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const AWS = require('aws-sdk');
 const { Client, Environment } = require('square');
-
-// AWS Secrets Manager client with connection reuse
-let secretsManagerClient = null;
-const getSecretsManager = () => {
-  if (!secretsManagerClient) {
-    secretsManagerClient = new AWS.SecretsManager({
-      maxRetries: 3,
-      httpOptions: {
-        connectTimeout: 1000,
-        timeout: 3000
-      }
-    });
-  }
-  return secretsManagerClient;
-};
-
-/**
- * Get a secret from AWS Secrets Manager
- * @param {string} secretName - The name of the secret to retrieve
- * @returns {Promise<string>} - The secret value
- */
-async function getSecret(secretName) {
-  try {
-    // When running locally, mock the secret for testing
-    if (process.env.IS_OFFLINE || process.env.NODE_ENV === 'development') {
-      console.log('Running locally, returning mock secret');
-      return JSON.stringify({
-        applicationId: process.env.SQUARE_APPLICATION_ID || 'mock_app_id',
-        applicationSecret: process.env.SQUARE_APPLICATION_SECRET || 'mock_app_secret',
-        webhookSignatureKey: process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || 'mock_webhook_key'
-      });
-    }
-    
-    // Using AWS Secrets Manager
-    const secretsManager = getSecretsManager();
-    const data = await secretsManager.getSecretValue({ SecretId: secretName }).promise();
-    
-    if (!data.SecretString) {
-      throw new Error('No SecretString found in AWS Secrets Manager response');
-    }
-    
-    return data.SecretString;
-  } catch (error) {
-    console.error('Error retrieving secret:', error);
-    throw error;
-  }
-}
+const awsUtils = require('../utils/aws');
 
 // Cache for Square credentials and clients
 let squareCredentials = null;
@@ -117,11 +71,8 @@ async function getSquareCredentials() {
     // Use AWS SDK to get secrets
     const secretName = process.env.SQUARE_CREDENTIALS_SECRET_NAME || 'dev/joylabs/square';
     
-    // Log that we're using AWS Secrets Manager (but don't log the secret name in production)
-    console.log('Retrieving Square credentials from AWS Secrets Manager');
-    
     try {
-      const secretValue = await getSecret(secretName);
+      const secretValue = await awsUtils.getSecret(secretName);
       const credentials = JSON.parse(secretValue);
       
       console.log('Square Environment: production');
