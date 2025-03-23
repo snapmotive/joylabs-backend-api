@@ -29,14 +29,22 @@ app.use(cookieParser());
 app.get('/api/auth/square/callback', async (req, res) => {
   try {
     console.log('Received Square OAuth callback');
-    const { code } = req.query;
+    const { code, state } = req.query;
     
     if (!code) {
       return res.status(400).json({ error: 'No authorization code provided' });
     }
     
-    // Exchange code for tokens
-    const tokenResponse = await squareService.getOAuthToken(code);
+    // Check for PKCE code verifier in cookies
+    const codeVerifier = req.cookies?.square_oauth_code_verifier || null;
+    if (codeVerifier) {
+      console.log('Found code_verifier in cookies, using PKCE flow');
+    } else {
+      console.log('No code_verifier found, using standard OAuth flow');
+    }
+    
+    // Exchange code for tokens using PKCE if available
+    const tokenResponse = await squareService.getOAuthToken(code, codeVerifier);
     
     if (!tokenResponse.success) {
       console.error('OAuth token exchange failed:', tokenResponse.error);
@@ -57,6 +65,11 @@ app.get('/api/auth/square/callback', async (req, res) => {
       // Create new merchant record
       await userService.createMerchant(merchantId, accessToken, refreshToken, expiresAt);
       console.log(`Created new merchant: ${merchantId}`);
+    }
+    
+    // Clear PKCE cookie if it exists
+    if (codeVerifier) {
+      res.clearCookie('square_oauth_code_verifier');
     }
     
     // Redirect to success page

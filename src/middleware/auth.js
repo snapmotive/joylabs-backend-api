@@ -75,24 +75,14 @@ async function refreshSquareTokenIfNeeded(req, res, next) {
           });
         }
         
-        // Exchange refresh token for new access token
-        const baseUrl = process.env.SQUARE_ENVIRONMENT === 'production'
-          ? 'https://connect.squareup.com'
-          : 'https://connect.squareupsandbox.com';
-        
-        const axios = require('axios');
-        const response = await axios.post(`${baseUrl}/oauth2/token`, {
-          client_id: process.env.SQUARE_APPLICATION_ID,
-          client_secret: process.env.SQUARE_APPLICATION_SECRET,
-          refresh_token: refreshToken,
-          grant_type: 'refresh_token'
-        });
+        // Use Square service to refresh token
+        const response = await squareService.refreshToken(refreshToken);
         
         // Update user with new tokens
         const updatedUser = await User.update(user.id, {
-          square_access_token: response.data.access_token,
-          square_refresh_token: response.data.refresh_token,
-          square_token_expires_at: new Date(Date.now() + response.data.expires_in * 1000).toISOString()
+          square_access_token: response.access_token,
+          square_refresh_token: response.refresh_token,
+          square_token_expires_at: new Date(Date.now() + response.expires_in * 1000).toISOString()
         });
         
         // Update request user

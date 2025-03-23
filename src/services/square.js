@@ -56,114 +56,57 @@ function withCache(fn, cacheKey, ttl = CACHE_TTL) {
 }
 
 /**
- * Get Square credentials from AWS Secrets Manager or environment variables
+ * Retrieve Square credentials
+ * @returns {Promise<Object>} Square credentials
  */
-const getSquareCredentials = async () => {
-  // Early return for cached credentials if not expired
-  if (squareCredentials && squareCredentials.cachedAt && 
-      (Date.now() - squareCredentials.cachedAt) < CREDENTIALS_CACHE_TTL) {
-    console.log('Using cached Square credentials');
-    return squareCredentials;
-  }
-  
+async function getSquareCredentials() {
   try {
-    // If running locally or environment variables are set, use them
-    if (process.env.IS_OFFLINE || process.env.NODE_ENV === 'development') {
-      console.log('Using local environment variables for Square credentials');
-      
-      squareCredentials = {
-        applicationId: process.env.SQUARE_APPLICATION_ID,
-        applicationSecret: process.env.SQUARE_APPLICATION_SECRET,
-        webhookSignatureKey: process.env.SQUARE_WEBHOOK_SIGNATURE_KEY,
-        environment: process.env.SQUARE_ENVIRONMENT || 'sandbox',
-        cachedAt: Date.now()
-      };
-      
-      console.log('Loaded credentials:', {
-        environment: squareCredentials.environment,
-        applicationId: squareCredentials.applicationId,
-        hasWebhookKey: !!squareCredentials.webhookSignatureKey
-      });
-      
-      return squareCredentials;
-    }
-    
-    // Otherwise fetch from Secrets Manager
-    const secretId = process.env.SQUARE_CREDENTIALS_SECRET;
-    if (!secretId) {
-      throw new Error('SQUARE_CREDENTIALS_SECRET environment variable is not set');
-    }
-
-    console.log('Fetching Square credentials from Secrets Manager with secret ID:', secretId);
-    const secretsManager = getSecretsManager();
-    const data = await secretsManager.getSecretValue({ SecretId: secretId }).promise();
-    
-    if (!data.SecretString) {
-      throw new Error('No SecretString found in AWS Secrets Manager response');
-    }
-
-    let secretData;
-    try {
-      secretData = JSON.parse(data.SecretString);
-      console.log('Successfully parsed secret data with keys:', Object.keys(secretData));
-    } catch (parseError) {
-      console.error('Failed to parse secret data:', parseError);
-      throw new Error('Failed to parse secret data from AWS Secrets Manager');
-    }
-    
-    // Log the structure of the secret (without exposing values)
-    console.log('Secret data structure:', {
-      hasApplicationId: !!secretData.applicationId || !!secretData.SQUARE_APPLICATION_ID,
-      hasApplicationSecret: !!secretData.applicationSecret || !!secretData.SQUARE_APPLICATION_SECRET,
-      hasWebhookSignatureKey: !!secretData.webhookSignatureKey || !!secretData.SQUARE_WEBHOOK_SIGNATURE_KEY,
-      availableKeys: Object.keys(secretData)
-    });
-    
-    // Try different possible key names
-    const applicationId = secretData.applicationId || secretData.SQUARE_APPLICATION_ID;
-    const applicationSecret = secretData.applicationSecret || secretData.SQUARE_APPLICATION_SECRET;
-    const webhookSignatureKey = secretData.webhookSignatureKey || secretData.SQUARE_WEBHOOK_SIGNATURE_KEY || process.env.SQUARE_WEBHOOK_SIGNATURE_KEY;
-    
-    if (!applicationId || !applicationSecret) {
-      throw new Error(`Invalid secret format: missing required fields. Available keys: ${Object.keys(secretData).join(', ')}`);
-    }
-
-    squareCredentials = {
-      applicationId,
-      applicationSecret,
-      webhookSignatureKey,
-      environment: process.env.SQUARE_ENVIRONMENT || 'production',
-      cachedAt: Date.now()
+    // First check if credentials are in environment variables
+    const envCredentials = {
+      applicationId: process.env.SQUARE_APPLICATION_ID,
+      applicationSecret: process.env.SQUARE_APPLICATION_SECRET,
+      accessToken: process.env.SQUARE_ACCESS_TOKEN,
+      environment: 'production', // Always use production
+      webhookSignatureKey: process.env.SQUARE_WEBHOOK_SIGNATURE_KEY
     };
+
+    // If all credentials are available in environment variables, use them
+    if (envCredentials.applicationId && 
+        envCredentials.applicationSecret && 
+        envCredentials.accessToken && 
+        envCredentials.webhookSignatureKey) {
+      console.log('Using Square credentials from environment variables');
+      return envCredentials;
+    }
+
+    // Otherwise, retrieve from AWS Secrets Manager
+    console.log('Retrieving Square credentials from AWS Secrets Manager');
     
-    console.log('Successfully loaded credentials from Secrets Manager with application ID:', squareCredentials.applicationId);
-    console.log('Webhook signature key:', webhookSignatureKey ? 'present' : 'missing');
+    // Use AWS SDK to get secrets
+    const secretName = process.env.SQUARE_CREDENTIALS_SECRET_NAME || 'dev/joylabs/square';
     
-    // Validate the credentials format
-    if (squareCredentials.applicationId.startsWith('sq0idp-') && 
-        squareCredentials.applicationSecret.length > 0) {
-      return squareCredentials;
-    } else {
-      throw new Error('Invalid credential format. Application ID should start with sq0idp-');
+    // Log that we're using AWS Secrets Manager (but don't log the secret name in production)
+    console.log('Retrieving Square credentials from AWS Secrets Manager');
+    
+    try {
+      const secretValue = await getSecret(secretName);
+      const credentials = JSON.parse(secretValue);
+      
+      console.log('Square Environment: production');
+      
+      return {
+        ...credentials,
+        environment: 'production' // Always use production
+      };
+    } catch (error) {
+      console.error('Error retrieving Square credentials from AWS Secrets Manager:', error);
+      throw new Error('Failed to retrieve Square credentials');
     }
   } catch (error) {
-    console.error('Error fetching Square credentials:', error);
-    
-    // Add reusable error handling with specific actions for different error types
-    if (error.code === 'ResourceNotFoundException') {
-      console.error('Secret not found. Verify secret name and AWS region.');
-    } else if (error.code === 'AccessDeniedException') {
-      console.error('Permissions issue. Check IAM role has secretsmanager:GetSecretValue permission.');
-    } else if (error.code === 'ThrottlingException') {
-      console.error('Rate limited by AWS. Implement exponential backoff retry.');
-    } else if (error.code === 'InternalServiceError') {
-      console.error('AWS Secrets Manager service issue. Try again later.');
-    }
-    
-    // Re-throw for caller to handle
+    console.error('Error getting Square credentials:', error);
     throw error;
   }
-};
+}
 
 /**
  * Get a configured Square API client with connection reuse
@@ -214,7 +157,7 @@ const generateCodeVerifier = () => {
 /**
  * Create code challenge from verifier for PKCE
  */
-const generateCodeChallenge = (verifier) => {
+const generateCodeChallenge = async (verifier) => {
   return crypto
     .createHash('sha256')
     .update(verifier)
@@ -235,59 +178,52 @@ function generateRandomString(length = 32) {
 }
 
 const getRedirectUrl = () => {
-  // In production, always use the API Gateway URL
-  if (process.env.SQUARE_ENVIRONMENT === 'production') {
-    return `https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback`;
-  }
-  // For other environments, use the configured redirect URL
-  return process.env.SQUARE_REDIRECT_URL;
+  // Always use the production API Gateway URL
+  return `https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback`;
 };
 
 /**
- * Generate OAuth URL for Square authorization
+ * Generate Square OAuth URL
  */
-const generateOAuthUrl = async (state) => {
+async function generateOAuthUrl(state, codeVerifier = null) {
   const credentials = await getSquareCredentials();
-  const applicationId = credentials.applicationId;
+  console.log(`Generating OAuth URL with state: ${state}, app ID: ${credentials.applicationId}`);
   
-  if (!applicationId) {
-    throw new Error('Square application ID not configured');
-  }
-
-  console.log('Generating OAuth URL with state:', state);
-  console.log('Using application ID:', applicationId);
-  console.log('Environment:', process.env.SQUARE_ENVIRONMENT);
+  // Always use production URL
+  const baseUrl = 'https://connect.squareup.com';
   
-  const redirectUrl = getRedirectUrl();
-  console.log('Redirect URL:', redirectUrl);
-  
-  // Validate redirect URL
-  try {
-    new URL(redirectUrl);
-  } catch (error) {
-    throw new Error('Invalid redirect URL: ' + redirectUrl);
+  // Ensure valid redirect URL
+  const redirectUrl = process.env.SQUARE_REDIRECT_URL;
+  if (!redirectUrl) {
+    throw new Error('SQUARE_REDIRECT_URL is not configured');
   }
   
+  // Construct the OAuth URL with all required parameters
   const params = new URLSearchParams({
-    client_id: applicationId,
+    client_id: credentials.applicationId,
     response_type: 'code',
-    scope: 'MERCHANT_PROFILE_READ',
+    scope: 'MERCHANT_PROFILE_READ PAYMENTS_WRITE PAYMENTS_READ ORDERS_READ ORDERS_WRITE ITEMS_READ ITEMS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE',
     redirect_uri: redirectUrl,
-    state: state
+    state
   });
-
-  // Always use production URL since we're in production mode
-  const baseUrl = 'https://connect.squareup.com/oauth2/authorize';
-  const url = `${baseUrl}?${params.toString()}`;
   
-  console.log('Generated full OAuth URL:', url);
-  return url;
-};
+  // Add PKCE parameters if code verifier is provided
+  if (codeVerifier) {
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    params.append('code_challenge', codeChallenge);
+    params.append('code_challenge_method', 'S256');
+    console.log('Added PKCE parameters to OAuth URL');
+  } else {
+    console.log('No code verifier provided, not using PKCE flow');
+  }
+  
+  return `${baseUrl}/oauth2/authorize?${params.toString()}`;
+}
 
 /**
  * Exchange authorization code for OAuth token
  */
-const exchangeCodeForToken = async (code) => {
+const exchangeCodeForToken = async (code, code_verifier = null) => {
   console.log('Exchanging authorization code for token');
   console.log('Using Square Environment:', process.env.SQUARE_ENVIRONMENT);
   
@@ -315,6 +251,7 @@ const exchangeCodeForToken = async (code) => {
   
   console.log('Got valid credentials with application ID:', credentials.applicationId);
   
+  // Always use production URL for Square API in production mode
   const baseUrl = 'https://connect.squareup.com';
   const redirectUrl = getRedirectUrl();
   
@@ -330,6 +267,12 @@ const exchangeCodeForToken = async (code) => {
       grant_type: 'authorization_code'
     };
     
+    // Add code_verifier for PKCE if provided
+    if (code_verifier) {
+      console.log('Using PKCE flow with code_verifier');
+      requestBody.code_verifier = code_verifier;
+    }
+    
     // Validate request body
     if (Object.values(requestBody).some(value => !value)) {
       const missingFields = Object.entries(requestBody)
@@ -341,7 +284,8 @@ const exchangeCodeForToken = async (code) => {
     // Log request (excluding secret)
     console.log('Request body:', {
       ...requestBody,
-      client_secret: '[REDACTED]'
+      client_secret: '[REDACTED]',
+      code_verifier: code_verifier ? '[REDACTED]' : undefined
     });
     
     const response = await axios.post(`${baseUrl}/oauth2/token`, requestBody, {
@@ -383,9 +327,8 @@ const exchangeCodeForToken = async (code) => {
 async function refreshToken(refreshToken) {
   const credentials = await getSquareCredentials();
   
-  const baseUrl = credentials.environment === 'production'
-    ? 'https://connect.squareup.com'
-    : 'https://connect.squareupsandbox.com';
+  // Always use production URL
+  const baseUrl = 'https://connect.squareup.com';
   
   try {
     const response = await axios.post(`${baseUrl}/oauth2/token`, {
@@ -401,30 +344,17 @@ async function refreshToken(refreshToken) {
       refreshed_at: new Date().toISOString()
     };
     
-    // Log successful token refresh
-    console.info(`Square token refreshed successfully at ${result.refreshed_at}`);
+    console.log('Successfully refreshed token');
     
     return result;
   } catch (error) {
-    // Enhanced error handling with detailed logging
-    const statusCode = error.response?.status;
-    const errorData = error.response?.data;
+    console.error('Error refreshing token:', error.message);
     
-    console.error('Error refreshing token:', {
-      statusCode,
-      errorType: errorData?.type,
-      errorDetail: errorData?.errors,
-      message: error.message
-    });
-    
-    // Throw specific error based on status code for better client handling
-    if (statusCode === 401 || statusCode === 403) {
-      throw new Error('Refresh token is invalid or expired. User must re-authenticate.');
-    } else if (statusCode === 429) {
-      throw new Error('Rate limit exceeded. Please try again later.');
-    } else {
-      throw new Error('Failed to refresh token');
+    if (error.response) {
+      console.error('Error response:', error.response.data);
     }
+    
+    throw error;
   }
 }
 
@@ -434,9 +364,8 @@ async function refreshToken(refreshToken) {
 async function revokeToken(accessToken) {
   const credentials = await getSquareCredentials();
   
-  const baseUrl = credentials.environment === 'production'
-    ? 'https://connect.squareup.com'
-    : 'https://connect.squareupsandbox.com';
+  // Always use production URL
+  const baseUrl = 'https://connect.squareup.com';
 
   try {
     await axios.post(`${baseUrl}/oauth2/revoke`, {
@@ -448,7 +377,7 @@ async function revokeToken(accessToken) {
     return true;
   } catch (error) {
     console.error('Error revoking token:', error.response?.data || error.message);
-    throw new Error('Failed to revoke token');
+    return false;
   }
 }
 
@@ -716,5 +645,27 @@ module.exports = {
   verifyWebhookSignature,
   // Export for tests
   createMockTokenResponse,
-  createMockMerchantInfo
+  createMockMerchantInfo,
+  
+  // Add OAuth token exchange function with PKCE support
+  getOAuthToken: async (code, code_verifier = null) => {
+    try {
+      const tokenData = await exchangeCodeForToken(code, code_verifier);
+      return {
+        success: true,
+        data: {
+          merchantId: tokenData.merchant_id,
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          expiresAt: tokenData.expires_at
+        }
+      };
+    } catch (error) {
+      console.error('Error exchanging code for token:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to exchange code for token'
+      };
+    }
+  }
 };
