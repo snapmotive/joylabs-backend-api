@@ -19,7 +19,7 @@ provider:
     SQUARE_APPLICATION_ID: ${env:SQUARE_APPLICATION_ID, ''}
     SQUARE_APPLICATION_SECRET: ${env:SQUARE_APPLICATION_SECRET, ''}
     SQUARE_WEBHOOK_SIGNATURE_KEY: ${env:SQUARE_WEBHOOK_SIGNATURE_KEY, ''}
-    SQUARE_CREDENTIALS_SECRET: ${env:SQUARE_CREDENTIALS_SECRET, 'joylabs/square-credentials-${self:provider.stage}'}
+    SQUARE_CREDENTIALS_SECRET: ${env:SQUARE_CREDENTIALS_SECRET, 'square-credentials-${self:provider.stage}'}
     MERCHANT_TABLE: ${self:service}-merchants-v3-${self:provider.stage}
     WEBHOOK_TABLE: ${self:service}-webhooks-v3-${self:provider.stage}
     CATEGORY_TABLE: ${self:service}-categories-v3-${self:provider.stage}
@@ -180,6 +180,8 @@ custom:
     packagerOptions:
       scripts:
         - rm -rf node_modules/aws-sdk
+  output:
+    handler: scripts/deployment-message.js
 
 functions:
   api:

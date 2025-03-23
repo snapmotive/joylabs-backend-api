@@ -69,7 +69,7 @@ async function getSquareCredentials() {
     console.log('Retrieving Square credentials from AWS Secrets Manager');
     
     // Use AWS SDK to get secrets
-    const secretName = process.env.SQUARE_CREDENTIALS_SECRET_NAME || 'dev/joylabs/square';
+    const secretName = process.env.SQUARE_CREDENTIALS_SECRET || 'square-credentials-production';
     
     try {
       const secretValue = await awsUtils.getSecret(secretName);
@@ -121,33 +121,6 @@ const getSquareClient = (accessToken = null) => {
 };
 
 /**
- * Generate a secure random state parameter for OAuth
- */
-const generateStateParam = () => {
-  // Generate a cryptographically secure random string
-  const state = crypto.randomBytes(32).toString('hex');
-  console.log('Generated OAuth state parameter:', state);
-  return state;
-};
-
-/**
- * Generate a code verifier for PKCE
- */
-const generateCodeVerifier = () => {
-  return crypto.randomBytes(32).toString('base64url');
-};
-
-/**
- * Create code challenge from verifier for PKCE
- */
-const generateCodeChallenge = async (verifier) => {
-  return crypto
-    .createHash('sha256')
-    .update(verifier)
-    .digest('base64url');
-};
-
-/**
  * Generate a random string for state parameter or code verifier
  */
 function generateRandomString(length = 32) {
@@ -158,6 +131,32 @@ function generateRandomString(length = 32) {
     result += characters.charAt(Math.floor(Math.random() * charactersLength));
   }
   return result;
+}
+
+/**
+ * Generate a state parameter for OAuth
+ */
+function generateStateParam() {
+  return generateRandomString(48);
+}
+
+/**
+ * Generate a code verifier for PKCE
+ */
+function generateCodeVerifier() {
+  return generateRandomString(64);
+}
+
+/**
+ * Generate a code challenge from a code verifier
+ */
+function generateCodeChallenge(codeVerifier) {
+  // Use the Node.js crypto module approach
+  const hash = crypto.createHash('sha256').update(codeVerifier).digest('base64');
+  return hash
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
 }
 
 const getRedirectUrl = () => {
@@ -192,7 +191,7 @@ async function generateOAuthUrl(state, codeVerifier = null) {
   
   // Add PKCE parameters if code verifier is provided
   if (codeVerifier) {
-    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    const codeChallenge = generateCodeChallenge(codeVerifier);
     params.append('code_challenge', codeChallenge);
     params.append('code_challenge_method', 'S256');
     console.log('Added PKCE parameters to OAuth URL');
@@ -610,45 +609,59 @@ async function verifyWebhookSignature(signature, body) {
   }
 }
 
+/**
+ * Exchange OAuth authorization code for tokens with PKCE support
+ */
+async function getOAuthToken(code, code_verifier = null) {
+  try {
+    console.log(`Exchanging code for token with${code_verifier ? '' : 'out'} PKCE`);
+    const tokenData = await exchangeCodeForToken(code, code_verifier);
+    return {
+      success: true,
+      data: {
+        merchantId: tokenData.merchant_id,
+        accessToken: tokenData.access_token,
+        refreshToken: tokenData.refresh_token,
+        expiresAt: tokenData.expires_at
+      }
+    };
+  } catch (error) {
+    console.error('Error exchanging code for token:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to exchange code for token'
+    };
+  }
+}
+
+/**
+ * List catalog items from Square
+ */
+async function listCatalog(client, options = {}) {
+  const catalogApi = client.catalogApi;
+  try {
+    console.log('Listing catalog items from Square');
+    const response = await catalogApi.listCatalog(undefined, options.types || 'ITEM,CATEGORY');
+    return response.result;
+  } catch (error) {
+    console.error('Error listing catalog items:', error);
+    throw error;
+  }
+}
+
 // Export with more descriptive names
 module.exports = {
   getSquareCredentials,
   getSquareClient,
+  exchangeCodeForToken,
+  getOAuthToken,
+  refreshTokenWithRetry,
+  verifyWebhookSignature,
+  generateOAuthUrl,
   generateStateParam,
   generateCodeVerifier,
   generateCodeChallenge,
-  getRedirectUrl,
-  generateOAuthUrl,
-  exchangeCodeForToken,
-  refreshToken,
-  refreshTokenWithRetry,
-  revokeToken,
-  testSquareConnection,
   getMerchantInfo,
-  verifyWebhookSignature,
-  // Export for tests
-  createMockTokenResponse,
-  createMockMerchantInfo,
-  
-  // Add OAuth token exchange function with PKCE support
-  getOAuthToken: async (code, code_verifier = null) => {
-    try {
-      const tokenData = await exchangeCodeForToken(code, code_verifier);
-      return {
-        success: true,
-        data: {
-          merchantId: tokenData.merchant_id,
-          accessToken: tokenData.access_token,
-          refreshToken: tokenData.refresh_token,
-          expiresAt: tokenData.expires_at
-        }
-      };
-    } catch (error) {
-      console.error('Error exchanging code for token:', error);
-      return {
-        success: false,
-        error: error.message || 'Failed to exchange code for token'
-      };
-    }
-  }
+  getMerchantInfoWithCache,
+  listCatalog
 };

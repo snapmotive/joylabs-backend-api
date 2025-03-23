@@ -17,6 +17,10 @@ router.get('/square', async (req, res) => {
     const state = generateStateParam();
     console.log('Generated state parameter:', state);
     
+    // Generate code verifier for PKCE flow
+    const codeVerifier = generateCodeVerifier();
+    console.log('Generated code verifier for PKCE flow');
+    
     // Store state in memory for validation
     if (!global.oauthStates) {
       global.oauthStates = new Map();
@@ -30,15 +34,33 @@ router.get('/square', async (req, res) => {
       }
     }
     
-    // Store new state with timestamp
+    // Store new state with timestamp and code verifier
     global.oauthStates.set(state, {
       timestamp: now,
-      used: false
+      used: false,
+      codeVerifier: codeVerifier
     });
     
-    // Generate OAuth URL with the secure state
-    const url = await generateOAuthUrl(state);
-    console.log('Redirecting to Square OAuth URL:', url);
+    // Set code verifier in cookie for callback
+    res.cookie('square_oauth_code_verifier', codeVerifier, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 5 * 60 * 1000, // 5 minutes
+      sameSite: 'lax'
+    });
+    
+    // Generate OAuth URL with the secure state and code verifier
+    const url = await generateOAuthUrl(state, codeVerifier);
+    console.log('Redirecting to Square OAuth URL');
+    
+    // Log details for debugging (with redacted values)
+    console.log('OAuth request details:', {
+      environment: 'production',
+      state: state,
+      code_verifier: codeVerifier.substring(0, 5) + '...',
+      has_cookie: true
+    });
+    
     res.redirect(url);
   } catch (error) {
     console.error('Error generating OAuth URL:', error);
@@ -82,9 +104,18 @@ router.get('/square/callback', async (req, res) => {
   storedState.used = true;
   
   try {
+    // Check for code verifier in the stored state or cookies
+    const codeVerifier = storedState.codeVerifier || req.cookies?.square_oauth_code_verifier;
+    
+    if (codeVerifier) {
+      console.log('Found code_verifier, using PKCE flow');
+    } else {
+      console.log('No code_verifier found, using standard OAuth flow');
+    }
+    
     // Exchange code for token
     console.log('Exchanging code for token...');
-    const tokenData = await exchangeCodeForToken(code);
+    const tokenData = await exchangeCodeForToken(code, codeVerifier);
     console.log('Token exchange successful');
     
     // Get merchant information
@@ -128,6 +159,11 @@ router.get('/square/callback', async (req, res) => {
     
     // Clean up used state
     global.oauthStates.delete(state);
+    
+    // Clear PKCE cookie if it exists
+    if (req.cookies?.square_oauth_code_verifier) {
+      res.clearCookie('square_oauth_code_verifier');
+    }
     
     // Redirect to frontend with token
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';

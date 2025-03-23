@@ -7,6 +7,17 @@
 require('dotenv').config();
 const AWS = require('aws-sdk');
 const readline = require('readline');
+const fs = require('fs');
+const path = require('path');
+
+// Parse command line arguments
+const args = {};
+process.argv.slice(2).forEach(arg => {
+  if (arg.startsWith('--')) {
+    const [key, value] = arg.slice(2).split('=');
+    args[key] = value || true;
+  }
+});
 
 // Create a readline interface for user input
 const rl = readline.createInterface({
@@ -27,11 +38,11 @@ function question(query) {
 async function updateSecrets() {
   try {
     // Get current environment
-    const stage = process.env.NODE_ENV || 'development';
+    const stage = args.stage || 'development';
     console.log(`Updating Square credentials for ${stage} environment`);
     
     // Get AWS region from environment or use default
-    const region = process.env.REGION || 'us-west-1';
+    const region = args.region || process.env.AWS_REGION || 'us-west-1';
     console.log(`Using AWS region: ${region}`);
     
     // Configure AWS SDK
@@ -41,7 +52,7 @@ async function updateSecrets() {
     const secretsManager = new AWS.SecretsManager();
     
     // Get the secret name from environment variables
-    const secretName = process.env.SQUARE_CREDENTIALS_SECRET || `joylabs/square-credentials-${stage}`;
+    const secretName = process.env.SQUARE_CREDENTIALS_SECRET || `square-credentials-${stage}`;
     console.log(`Using secret name: ${secretName}`);
     
     // Ask for Square credentials
@@ -108,13 +119,9 @@ async function updateSecrets() {
     if (stage === 'development') {
       console.log('\nUpdating local .env.local file for development...');
       
-      const fs = require('fs');
-      const path = require('path');
-      const envPath = path.join(__dirname, '..', '.env.local');
-      
       let envContent = '';
-      if (fs.existsSync(envPath)) {
-        envContent = fs.readFileSync(envPath, 'utf8');
+      if (fs.existsSync(path.join(__dirname, '..', '.env.local'))) {
+        envContent = fs.readFileSync(path.join(__dirname, '..', '.env.local'), 'utf8');
       }
       
       // Update environment variables
@@ -133,7 +140,7 @@ async function updateSecrets() {
         }
       });
       
-      fs.writeFileSync(envPath, envContent);
+      fs.writeFileSync(path.join(__dirname, '..', '.env.local'), envContent);
       console.log('Local .env.local file updated successfully.');
     }
     
