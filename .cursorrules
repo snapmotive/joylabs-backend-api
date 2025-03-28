@@ -1,0 +1,7 @@
+WE ARE ALWAYS IN PRODUCTION. DO NOT USE SANDBOX, TEST, OR DEV MODES. ENSURE ALL PLACEHOLDERS ARE REPLACED OR REMOVED IF NO LONGER NECCESSARY.
+
+Our redirect url for Square Console has to be HTTPS and we can only use ONE redirect url.
+
+YOU MUST USE https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback for the redirect url on square
+
+we DO NOT have any custom urls such as joylabs.com

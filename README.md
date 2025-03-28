@@ -1,189 +1,359 @@
 # JoyLabs Backend API
 
-AWS Serverless backend API for JoyLabs Catalogue App with Square OAuth integration.
-
 ## Overview
 
-This project provides a serverless backend API for the JoyLabs mobile app, handling authentication, Square integration, and data management using AWS Lambda, API Gateway, and DynamoDB.
-
-## Technology Stack
-
-- **AWS Lambda** - Serverless compute service
-- **API Gateway** - API management and routing
-- **DynamoDB** - NoSQL database for persistent storage
-- **Serverless Framework** - Infrastructure as code for AWS deployment
-- **Express.js** - Web framework for the API
-- **Square SDK** - Integration with Square for payments and merchant data
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js (v18+)
-- npm
-- AWS CLI configured with appropriate credentials
-- Serverless Framework CLI
-- Square Developer account
-
-### Installation
-
-1. Clone the repository:
-   ```
-   git clone https://github.com/joylabs/joylabs-backend.git
-   cd joylabs-backend
-   ```
-
-2. Install dependencies:
-   ```
-   npm install
-   ```
-
-3. Set up environment variables:
-   ```
-   cp .env.example .env
-   ```
-   Edit the `.env` file with your configuration values.
-
-4. Install the Serverless Framework:
-   ```
-   npm install -g serverless
-   ```
-
-### Local Development
-
-1. Start the local development server:
-   ```
-   npm run dev
-   ```
-
-2. Test the Square OAuth flow locally:
-   ```
-   npm run test:oauth
-   ```
-
-3. Run tests:
-   ```
-   npm test
-   ```
-
-## Deployment
-
-### Deploy to AWS
-
-1. Configure your AWS credentials:
-   ```
-   aws configure
-   ```
-
-2. Deploy using the provided script:
-   ```
-   ./deploy-aws.sh
-   ```
-
-   Or manually with:
-   ```
-   npm run deploy:prod
-   ```
-
-3. Update your Square Developer Console with the deployed callback URL.
-
-## API Endpoints
-
-### Authentication
-
-- `GET /api/auth/square/init` - Initialize Square OAuth flow
-- `GET /api/auth/square/callback` - Handle Square OAuth callback
-- `GET /api/auth/square/mobile-init` - Initialize Square OAuth flow for mobile apps (with PKCE)
-- `GET /api/auth/square/mobile-callback` - Handle Square OAuth callback for mobile apps
-
-### Square Webhooks
-
-- `POST /api/webhooks/square` - Handle Square webhook events
-
-### Health Check
-
-- `GET /api/health` - API health check endpoint
-
-## Configuration
-
-### Environment Variables
-
-Key environment variables:
-
-- `NODE_ENV` - Environment (development, production)
-- `STAGE` - Deployment stage (dev, production)
-- `SQUARE_ENVIRONMENT` - Square API environment (sandbox, production)
-- `SQUARE_APPLICATION_ID` - Square application ID
-- `SQUARE_REDIRECT_URL` - OAuth callback URL
-- `REGION` - AWS region
-- `USERS_TABLE` - DynamoDB table for users
-- `SESSIONS_TABLE` - DynamoDB table for sessions
-- `SQUARE_CREDENTIALS_SECRET` - AWS Secrets Manager secret name for Square credentials
-- `FRONTEND_URL` - Frontend application URL for redirects
-- `LOG_LEVEL` - Logging level
-
-### AWS Resources
-
-The Serverless Framework automatically creates:
-
-- Lambda functions
-- API Gateway endpoints
-- DynamoDB tables
-- IAM roles and policies
-- CloudWatch Log Groups
-
-## Security
-
-- JWT authentication for protected endpoints
-- PKCE (Proof Key for Code Exchange) for mobile OAuth flow
-- AWS IAM for resource access control
-- Rate limiting on API endpoints
-- HTTPS for all communications
-
-## Testing
-
-Run the test suite:
-
-```
-npm test
-```
-
-## License
-
-Proprietary - All rights reserved
+This repository contains the serverless backend API for JoyLabs, primarily focused on OAuth integration with Square for mobile applications. The system is built on AWS Lambda with Express.js, using the Serverless Framework for deployment and infrastructure management.
 
 ## Architecture
 
+The application follows a serverless architecture pattern:
+
+- **API Gateway**: Handles HTTP requests and routes them to Lambda functions
+- **Lambda Functions**: Process API requests, interact with Square API, and manage OAuth flows
+- **DynamoDB**: Stores OAuth state parameters, code verifiers, and manages session state
+- **AWS Secrets Manager**: Securely stores Square API credentials
+- **CloudWatch**: Monitors and logs all Lambda function executions
+
+### Core Components
+
+1. **API Service**: Main Express application handling general API endpoints
+2. **OAuth Service**: Specialized Lambda function for Square OAuth authentication
+3. **Webhooks Service**: Handles Square webhooks for event notifications
+
+## Dependencies
+
+Primary dependencies (from package.json):
+
+```json
+{
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.350.0",
+    "@aws-sdk/client-secrets-manager": "^3.350.0",
+    "@aws-sdk/lib-dynamodb": "^3.350.0",
+    "@aws-sdk/util-dynamodb": "^3.350.0",
+    "axios": "^1.4.0",
+    "body-parser": "^1.20.2",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.0",
+    "serverless-http": "^3.2.0",
+    "square": "^35.1.0"
+  }
+}
+```
+
+### Layers
+
+The Lambda functions use two dependency layers to reduce cold start times and package sizes:
+
+1. **dependencies-layer**: Contains all common Node.js dependencies
+2. **square-layer**: Contains the Square SDK and related dependencies
+
+## AWS Configuration
+
 ### Lambda Functions
 
-The backend is organized into three separate Lambda functions, each with its own specific responsibility:
+Three primary Lambda functions:
 
-1. **API Function** - Handles all general API requests, routed through Express.
-2. **Square OAuth Callback Function** - Dedicated to handling Square OAuth callback requests.
-3. **Square Webhook Function** - Dedicated to processing webhook events from Square.
+1. **api**: Main API service handling general endpoints
+   - Handler: `src/index.handler`
+   - Environment: `production`
+   - Memory: 512 MB
+   - Timeout: 30 seconds
 
-### Lambda Layers
+2. **oauth**: Specialized function for OAuth processes
+   - Handler: `src/oauthHandlers.handler`
+   - Environment: `production`
+   - Memory: 512 MB
+   - Timeout: 30 seconds
 
-To optimize the deployment package size and improve performance, the project uses Lambda Layers to separate dependencies:
+3. **webhooks**: Handles Square webhooks
+   - Handler: `src/webhooks.handler`
+   - Environment: `production`
+   - Memory: 512 MB
+   - Timeout: 30 seconds
 
-1. **Dependencies Layer** - Contains common dependencies like Express, AWS SDK, and utilities.
-2. **Square Layer** - Contains Square-specific dependencies, which can be quite large.
+### IAM Permissions
 
-This architecture provides several benefits:
-- Faster Lambda cold starts due to smaller deployment packages
-- Simplified dependency management
-- Better separation of concerns
+Each Lambda function requires these permissions:
 
-### Setting Up Layers
+```yaml
+- Effect: Allow
+  Action:
+    - dynamodb:Query
+    - dynamodb:Scan
+    - dynamodb:GetItem
+    - dynamodb:PutItem
+    - dynamodb:UpdateItem
+    - dynamodb:DeleteItem
+  Resource: 
+    - !GetAtt StatesTable.Arn
 
-To set up the Lambda layers locally, run:
+- Effect: Allow
+  Action:
+    - secretsmanager:GetSecretValue
+  Resource: 
+    - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:square-credentials-*"
+```
+
+### DynamoDB Tables
+
+1. **States Table** (`joylabs-backend-api-v3-production-states`):
+   - Primary Key: `state` (String)
+   - TTL: Enabled on the `ttl` attribute
+   - Provisioned Throughput: On-demand
+   - Data stored:
+     - `state`: OAuth state parameter
+     - `code_verifier`: PKCE code verifier
+     - `timestamp`: Creation time
+     - `ttl`: Time-to-live (expiration)
+     - `used`: Whether the state has been used
+     - `redirectUrl`: Where to redirect after authentication
+
+### API Gateway
+
+- REST API with custom domain: `gki8kva7e3.execute-api.us-west-1.amazonaws.com`
+- Stage: `production`
+- CORS enabled for all endpoints
+- Binary media types support
+- Rate limiting configured for security
+
+## Credentials Management
+
+Square API credentials are stored in AWS Secrets Manager under the name `square-credentials-production`. The secret contains:
+
+```json
+{
+  "applicationId": "YOUR_SQUARE_APPLICATION_ID",
+  "applicationSecret": "YOUR_SQUARE_APPLICATION_SECRET"
+}
+```
+
+Environment variables required:
 
 ```
-npm run setup-layers
+NODE_ENV=production
+API_BASE_URL=https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production
+API_GATEWAY_URL=https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production
+SQUARE_APPLICATION_ID=YOUR_SQUARE_APPLICATION_ID
+SQUARE_APPLICATION_SECRET=YOUR_SQUARE_APPLICATION_SECRET
+SQUARE_WEBHOOK_SIGNATURE_KEY=YOUR_SQUARE_WEBHOOK_SIGNATURE_KEY
+SQUARE_ENVIRONMENT=production
+SQUARE_AUTH_URL=https://connect.squareup.com/oauth2/authorize
+SQUARE_TOKEN_URL=https://connect.squareup.com/oauth2/token
+SQUARE_CALLBACK_SCHEME=joylabs
+SQUARE_CALLBACK_PATH=square-callback
+STATES_TABLE=joylabs-backend-api-v3-production-states
+JWT_SECRET=YOUR_JWT_SECRET
+SESSION_SECRET=YOUR_SESSION_SECRET
+LOG_LEVEL=info
 ```
 
-This will install all dependencies in the appropriate layer directories.
+## OAuth Flow Logic
+
+The system implements the OAuth 2.0 PKCE (Proof Key for Code Exchange) flow for secure authentication with Square from mobile apps.
+
+### Flow Steps
+
+1. **State Registration** (`/api/auth/register-state`)
+   - Mobile app generates state and code_verifier
+   - App sends state, code_verifier, and redirectUrl to backend
+   - Backend stores these in DynamoDB with a 10-minute TTL
+
+2. **OAuth URL Generation** (`/api/auth/connect/url`)
+   - Backend generates the Square authorization URL with state and code_challenge
+   - URL is returned to the mobile app
+
+3. **Authorization**
+   - User is redirected to Square for authorization using the generated URL
+   - After authorization, Square redirects to the callback URL with code and state
+
+4. **Callback Handling** (`/api/auth/square/callback`)
+   - Backend receives code and state from Square
+   - Retrieves state data from DynamoDB to verify state and get code_verifier
+   - Exchanges code for access tokens using code_verifier
+   - Retrieves merchant info with the access token
+   - Marks state as used in DynamoDB
+   - Redirects to mobile app with tokens using custom URL scheme
+
+5. **Token Usage in App**
+   - Mobile app receives tokens via deep link
+   - App uses tokens for Square API requests
+
+### PKCE Implementation Details
+
+For security, we use PKCE flow which is critical for mobile apps:
+
+1. **Code Verifier**: A cryptographically random string generated on the mobile app
+   - 43-128 characters long
+   - URL-safe characters only (A-Z, a-z, 0-9, hyphen, period, underscore, tilde)
+
+2. **Code Challenge**: Derived from the code verifier
+   - SHA-256 hash of the code verifier
+   - Base64 URL encoded
+
+3. **State Parameter**: Another random string to prevent CSRF attacks
+   - Stored with code verifier in DynamoDB
+   - Validated during callback
+
+4. **Deep Link Handling**:
+   - Tokens are returned to the app via `joylabs://square-callback` URL scheme
+   - Parameters include `access_token`, `refresh_token`, `merchant_id`, and `business_name`
+
+## Mobile App Integration
+
+The mobile app needs to implement the following:
+
+1. **Generate State and Code Verifier**:
+   ```javascript
+   function generateCodeVerifier() {
+     const array = new Uint8Array(32);
+     crypto.getRandomValues(array);
+     return base64UrlEncode(array);
+   }
+
+   function generateState() {
+     const array = new Uint8Array(32);
+     crypto.getRandomValues(array);
+     return base64UrlEncode(array);
+   }
+   ```
+
+2. **Compute Code Challenge**:
+   ```javascript
+   async function generateCodeChallenge(codeVerifier) {
+     const hash = await crypto.subtle.digest('SHA-256', 
+       new TextEncoder().encode(codeVerifier));
+     return base64UrlEncode(new Uint8Array(hash));
+   }
+   ```
+
+3. **Register State**:
+   ```javascript
+   await fetch('https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/register-state', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({
+       state: state,
+       code_verifier: codeVerifier,
+       redirectUrl: 'joylabs://square-callback'
+     })
+   });
+   ```
+
+4. **Get Authorization URL**:
+   ```javascript
+   const response = await fetch(`https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/connect/url?state=${state}&code_challenge=${codeChallenge}&redirect_uri=joylabs://square-callback`);
+   const { url } = await response.json();
+   // Open URL in browser/WebView
+   ```
+
+5. **Handle Deep Link Callback**:
+   ```javascript
+   function handleDeepLink(url) {
+     if (url.startsWith('joylabs://square-callback')) {
+       const params = new URLSearchParams(url.split('?')[1]);
+       const accessToken = params.get('access_token');
+       const refreshToken = params.get('refresh_token');
+       const merchantId = params.get('merchant_id');
+       const businessName = params.get('business_name');
+       
+       // Store tokens securely
+       // Update app state for authenticated user
+     }
+   }
+   ```
+
+## Debugging and Troubleshooting
+
+### Logging
+
+All Lambda functions log to CloudWatch with structured logging:
+- Request details
+- State registration
+- Token exchange
+- Callback processing
+- Redirect URL construction
+
+Example log query for tracing an OAuth flow:
+```
+filter @message like "Square callback received"
+| sort @timestamp desc
+| limit 20
+```
+
+### Common Issues
+
+1. **Invalid State Parameter**
+   - Cause: State not registered or expired in DynamoDB
+   - Solution: Ensure state is registered before starting OAuth flow
+
+2. **Missing Code Verifier**
+   - Cause: Code verifier not stored with state
+   - Solution: Include code_verifier when registering state
+
+3. **URL Scheme Handling**
+   - Cause: Mobile app not correctly configured for deep linking
+   - Solution: Ensure proper configuration in `Info.plist` (iOS) or `AndroidManifest.xml` (Android)
+
+4. **DynamoDB Throughput**
+   - Cause: Exceeded provisioned capacity
+   - Solution: Monitor and adjust capacity or switch to on-demand
+
+## Deployment
+
+This project uses the Serverless Framework for deployment.
+
+### Prerequisites
+
+- Node.js 16+
+- AWS CLI configured with appropriate credentials
+- Serverless Framework installed globally (`npm install -g serverless`)
+
+### Deploy Commands
+
+```bash
+# Install dependencies
+npm install
+
+# Deploy to production
+npm run deploy
+
+# Deploy to development (if configured)
+npm run deploy:dev
+
+# Deploy specific function
+npx serverless deploy function -f oauth
+```
+
+### CI/CD Pipeline
+
+The recommended CI/CD pipeline uses GitHub Actions with these stages:
+1. **Build**: Install dependencies and prepare deployment package
+2. **Test**: Run unit and integration tests
+3. **Deploy**: Deploy to AWS using Serverless Framework
+4. **Verify**: Run post-deployment tests to verify functionality
+
+## Security Considerations
+
+1. **PKCE Flow**: Used instead of implicit flow to enhance security
+2. **State Parameter**: Prevents CSRF attacks
+3. **DynamoDB TTL**: Automatically expires unused states
+4. **JWT Security**: Short-lived tokens with proper signing
+5. **CORS**: Configured to allow only specific origins
+6. **Secrets Management**: API keys stored in AWS Secrets Manager
+7. **Input Validation**: All inputs validated before processing
+
+## License
+
+[MIT License](LICENSE)
+
+## Contact
+
+For support or questions, contact support@joylabs.com
 
 ---
 
-For more information, refer to the detailed documentation in the `docs/` directory. 
+*This documentation is maintained by the JoyLabs Backend Team* 

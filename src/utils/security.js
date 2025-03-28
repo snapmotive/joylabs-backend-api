@@ -1,9 +1,9 @@
-const AWS = require('aws-sdk');
+const { CloudWatchClient, PutMetricDataCommand } = require('@aws-sdk/client-cloudwatch');
 
 // Initialize CloudWatch client
 let cloudwatch;
 if (process.env.NODE_ENV === 'production') {
-  cloudwatch = new AWS.CloudWatch({
+  cloudwatch = new CloudWatchClient({
     region: process.env.AWS_REGION || 'us-west-1'
   });
 }
@@ -27,7 +27,7 @@ const logSecurityEvent = async (eventType, details, severity = 'INFO') => {
     }
     
     // Create CloudWatch metric
-    await cloudwatch.putMetricData({
+    const command = new PutMetricDataCommand({
       Namespace: 'JoyLabs/Security',
       MetricData: [
         {
@@ -47,7 +47,9 @@ const logSecurityEvent = async (eventType, details, severity = 'INFO') => {
           Timestamp: new Date()
         }
       ]
-    }).promise();
+    });
+    
+    await cloudwatch.send(command);
     
     // Log full details for analysis
     console.log(`[SECURITY:${severity}] ${eventType}:`, JSON.stringify(details));
@@ -105,7 +107,7 @@ const logOAuthActivity = async (details, success = true) => {
   // In production, log to CloudWatch
   if (cloudwatch && process.env.NODE_ENV === 'production') {
     try {
-      const params = {
+      const command = new PutMetricDataCommand({
         MetricData: [
           {
             MetricName: 'OAuthActivity',
@@ -124,9 +126,9 @@ const logOAuthActivity = async (details, success = true) => {
           }
         ],
         Namespace: 'JoyLabs/Security'
-      };
+      });
       
-      await cloudwatch.putMetricData(params).promise();
+      await cloudwatch.send(command);
     } catch (error) {
       console.error('Error logging to CloudWatch:', error);
     }

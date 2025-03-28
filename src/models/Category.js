@@ -1,14 +1,14 @@
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, ScanCommand, GetCommand, QueryCommand, PutCommand, UpdateCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 // Configure AWS
-const dynamoDb = process.env.IS_OFFLINE === 'true'
-  ? new AWS.DynamoDB.DocumentClient({
-      region: 'localhost',
-      endpoint: 'http://localhost:8000'
-    })
-  : new AWS.DynamoDB.DocumentClient();
+const client = new DynamoDBClient({
+  maxAttempts: 3,
+  requestTimeout: 3000
+});
 
+const dynamoDb = DynamoDBDocumentClient.from(client);
 const categoriesTable = process.env.CATEGORIES_TABLE;
 
 /**
@@ -23,7 +23,7 @@ const CategoryService = {
       TableName: categoriesTable
     };
 
-    const result = await dynamoDb.scan(params).promise();
+    const result = await dynamoDb.send(new ScanCommand(params));
     return result.Items;
   },
 
@@ -37,7 +37,7 @@ const CategoryService = {
       Key: { id }
     };
 
-    const result = await dynamoDb.get(params).promise();
+    const result = await dynamoDb.send(new GetCommand(params));
     return result.Item;
   },
 
@@ -51,14 +51,14 @@ const CategoryService = {
       IndexName: 'NameIndex',
       KeyConditionExpression: '#name = :name',
       ExpressionAttributeNames: {
-        '#name': 'name' // 'name' is a reserved word in DynamoDB
+        '#name': 'name'
       },
       ExpressionAttributeValues: {
         ':name': name
       }
     };
 
-    const result = await dynamoDb.query(params).promise();
+    const result = await dynamoDb.send(new QueryCommand(params));
     return result.Items[0];
   },
 
@@ -67,7 +67,6 @@ const CategoryService = {
    * @param {Object} category - Category data
    */
   async create(category) {
-    // Check if category with the same name already exists
     const existingCategory = await this.getByName(category.name);
     if (existingCategory) {
       throw new Error('Category with this name already exists');
@@ -87,7 +86,7 @@ const CategoryService = {
       Item: newCategory
     };
 
-    await dynamoDb.put(params).promise();
+    await dynamoDb.send(new PutCommand(params));
     return newCategory;
   },
 
@@ -99,15 +98,13 @@ const CategoryService = {
   async update(id, updates) {
     const timestamp = new Date().toISOString();
     
-    // Build update expression and attribute values
     let updateExpression = 'SET updatedAt = :updatedAt';
     const expressionAttributeValues = {
       ':updatedAt': timestamp
     };
 
-    // Add each update field to the expression
     Object.keys(updates).forEach((key, index) => {
-      if (key !== 'id') { // Don't update the primary key
+      if (key !== 'id') {
         const attributeName = `:attr${index}`;
         updateExpression += `, ${key} = ${attributeName}`;
         expressionAttributeValues[attributeName] = updates[key];
@@ -122,7 +119,7 @@ const CategoryService = {
       ReturnValues: 'ALL_NEW'
     };
 
-    const result = await dynamoDb.update(params).promise();
+    const result = await dynamoDb.send(new UpdateCommand(params));
     return result.Attributes;
   },
 
@@ -136,7 +133,7 @@ const CategoryService = {
       Key: { id }
     };
 
-    return dynamoDb.delete(params).promise();
+    return dynamoDb.send(new DeleteCommand(params));
   }
 };
 

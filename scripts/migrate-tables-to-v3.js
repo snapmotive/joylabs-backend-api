@@ -6,15 +6,20 @@
  */
 
 require('dotenv').config();
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, ScanCommand, BatchWriteCommand } = require('@aws-sdk/lib-dynamodb');
 const chalk = require('chalk');
 
 // Configure AWS
 const region = process.env.REGION || 'us-west-1';
-AWS.config.update({ region });
 
 // Initialize DynamoDB client
-const dynamoDB = new AWS.DynamoDB.DocumentClient();
+const client = new DynamoDBClient({
+  region,
+  maxAttempts: 3,
+  requestTimeout: 3000
+});
+const dynamoDB = DynamoDBDocumentClient.from(client);
 
 // Table mapping (old to new)
 const TABLE_MAPPING = {
@@ -58,7 +63,7 @@ async function scanTable(tableName) {
       params.ExclusiveStartKey = lastEvaluatedKey;
     }
     
-    const response = await dynamoDB.scan(params).promise();
+    const response = await dynamoDB.send(new ScanCommand(params));
     items.push(...response.Items);
     lastEvaluatedKey = response.LastEvaluatedKey;
     
@@ -94,7 +99,7 @@ async function batchWriteItems(tableName, items) {
       }
     };
     
-    await dynamoDB.batchWrite(params).promise();
+    await dynamoDB.send(new BatchWriteCommand(params));
     processed += batch.length;
     console.log(chalk.gray(`  Wrote ${processed}/${items.length} items...`));
   }

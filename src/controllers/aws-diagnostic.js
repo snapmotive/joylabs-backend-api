@@ -1,4 +1,7 @@
-const AWS = require('aws-sdk');
+const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
+const { DynamoDBClient, ListTablesCommand } = require('@aws-sdk/client-dynamodb');
+const { LambdaClient, ListFunctionsCommand } = require('@aws-sdk/client-lambda');
+const { APIGatewayClient, GetRestApisCommand } = require('@aws-sdk/client-api-gateway');
 
 /**
  * Comprehensive AWS diagnostic test page
@@ -7,15 +10,14 @@ async function runAwsDiagnostic(req, res) {
   try {
     const results = {
       timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV,
-      region: process.env.AWS_REGION || AWS.config.region,
+      region: process.env.AWS_REGION,
       tests: {}
     };
 
     // Test IAM Credentials
     try {
-      const sts = new AWS.STS();
-      const identity = await sts.getCallerIdentity().promise();
+      const stsClient = new STSClient({ region: process.env.AWS_REGION });
+      const identity = await stsClient.send(new GetCallerIdentityCommand({}));
       results.tests.credentials = {
         status: 'success',
         message: 'AWS credentials are valid',
@@ -32,10 +34,9 @@ async function runAwsDiagnostic(req, res) {
 
     // Test DynamoDB 
     try {
-      const dynamoDb = new AWS.DynamoDB();
-      const tables = await dynamoDb.listTables().promise();
+      const dynamoDb = new DynamoDBClient({ region: process.env.AWS_REGION });
+      const tables = await dynamoDb.send(new ListTablesCommand({}));
       
-      // Check if our app tables exist
       const requiredTables = [
         process.env.PRODUCTS_TABLE,
         process.env.CATEGORIES_TABLE,
@@ -61,10 +62,9 @@ async function runAwsDiagnostic(req, res) {
 
     // Test Lambda configuration
     try {
-      const lambda = new AWS.Lambda();
-      const functions = await lambda.listFunctions().promise();
+      const lambda = new LambdaClient({ region: process.env.AWS_REGION });
+      const functions = await lambda.send(new ListFunctionsCommand({}));
       
-      // Look for our service function
       const serviceName = 'joylabs-backend-api';
       const serviceFunctions = functions.Functions.filter(fn => 
         fn.FunctionName.includes(serviceName)
@@ -91,10 +91,9 @@ async function runAwsDiagnostic(req, res) {
 
     // Test API Gateway
     try {
-      const apiGateway = new AWS.APIGateway();
-      const apis = await apiGateway.getRestApis().promise();
+      const apiGateway = new APIGatewayClient({ region: process.env.AWS_REGION });
+      const apis = await apiGateway.send(new GetRestApisCommand({}));
       
-      // Look for our service API
       const serviceName = 'joylabs-backend-api';
       const serviceApis = apis.items.filter(api => 
         api.name.includes(serviceName)
@@ -108,7 +107,7 @@ async function runAwsDiagnostic(req, res) {
         apis: serviceApis.map(api => ({
           id: api.id,
           name: api.name,
-          endpoint: `https://${api.id}.execute-api.${process.env.AWS_REGION}.amazonaws.com/${process.env.NODE_ENV}`,
+          endpoint: `https://${api.id}.execute-api.${process.env.AWS_REGION}.amazonaws.com/production`,
           createdDate: api.createdDate
         }))
       };
@@ -119,17 +118,13 @@ async function runAwsDiagnostic(req, res) {
       };
     }
 
-    // Get the base URL for links
-    const isLocalhost = req.get('host').includes('localhost');
-    const baseUrl = isLocalhost ? process.env.API_BASE_URL : process.env.API_PROD_URL || req.protocol + '://' + req.get('host');
+    const baseUrl = process.env.API_PROD_URL || req.protocol + '://' + req.get('host');
     
-    // Return JSON or render HTML
     const format = req.query.format || 'html';
     if (format === 'json') {
       return res.json(results);
     }
 
-    // Render HTML results
     res.send(`
       <!DOCTYPE html>
       <html>
@@ -237,7 +232,6 @@ async function runAwsDiagnostic(req, res) {
             <h1>JoyLabs AWS Diagnostic Tool</h1>
             <div>
               <div><strong>Timestamp:</strong> ${results.timestamp}</div>
-              <div><strong>Environment:</strong> ${results.environment}</div>
               <div><strong>Region:</strong> ${results.region}</div>
             </div>
             
@@ -295,7 +289,6 @@ async function runAwsDiagnostic(req, res) {
                 <div class="mono">
                   ${results.tests.dynamodb.missingTables.join(', ')}
                 </div>
-                <p class="small">These tables will be created when you deploy with Serverless Framework</p>
               ` : ''}
             ` : ''}
           </div>
@@ -327,10 +320,8 @@ async function runAwsDiagnostic(req, res) {
                   </tr>
                 `).join('')}
               </table>
-              <p class="small">These are your deployed Lambda functions for this service</p>
             ` : `
               <p>No Lambda functions found for this service</p>
-              <p class="small">Deploy your service using 'serverless deploy' to create Lambda functions</p>
             `}
           </div>
           
@@ -359,28 +350,18 @@ async function runAwsDiagnostic(req, res) {
                   </tr>
                 `).join('')}
               </table>
-              <p class="small">These are your deployed API Gateway APIs for this service</p>
             ` : `
               <p>No API Gateway APIs found for this service</p>
-              <p class="small">Deploy your service using 'serverless deploy' to create API Gateway endpoints</p>
             `}
           </div>
           
           <div class="card">
-            <h2>Deployment Instructions</h2>
-            <p>To deploy your service to AWS, run:</p>
-            <div class="mono">
-              serverless deploy
-            </div>
-            <p>After deployment, update these environment variables:</p>
+            <h2>Environment Configuration</h2>
+            <p>Required environment variables:</p>
             <ul>
-              <li>API_BASE_URL: Update to your API Gateway URL</li>
-              <li>Square Redirect URL: Update in Square Developer Dashboard</li>
+              <li>API_PROD_URL: Your production API Gateway URL</li>
+              <li>SQUARE_REDIRECT_URL: Your production Square OAuth redirect URL</li>
             </ul>
-            <p>For testing local development:</p>
-            <div class="mono">
-              npm run dev
-            </div>
           </div>
         </body>
       </html>

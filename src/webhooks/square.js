@@ -1,14 +1,11 @@
 const crypto = require('crypto');
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
 const squareService = require('../services/square');
 
 // Initialize DynamoDB client
-const dynamoDb = process.env.IS_OFFLINE === 'true'
-  ? new AWS.DynamoDB.DocumentClient({
-      region: 'localhost',
-      endpoint: 'http://localhost:8000'
-    })
-  : new AWS.DynamoDB.DocumentClient();
+const client = new DynamoDBClient({ region: process.env.AWS_REGION });
+const dynamoDb = DynamoDBDocumentClient.from(client);
 
 /**
  * Verify Square webhook signature to ensure authenticity
@@ -59,7 +56,7 @@ const handleCatalogUpdated = async (eventData) => {
     console.log(`Catalog updated for merchant ${merchant_id}, version ${version}`);
     
     // Store the webhook event for audit purposes
-    await dynamoDb.put({
+    await dynamoDb.send(new PutCommand({
       TableName: process.env.WEBHOOKS_TABLE,
       Item: {
         id: `${merchant_id}-${Date.now()}`,
@@ -69,7 +66,7 @@ const handleCatalogUpdated = async (eventData) => {
         timestamp: new Date().toISOString(),
         data: eventData
       }
-    }).promise();
+    }));
     
     // TODO: Add your catalog synchronization logic here
     
@@ -129,7 +126,7 @@ const processWebhook = async (request, response) => {
     }
     
     // Log webhook receipt for audit purposes
-    await dynamoDb.put({
+    await dynamoDb.send(new PutCommand({
       TableName: process.env.WEBHOOKS_TABLE,
       Item: {
         id: eventId,
@@ -138,7 +135,7 @@ const processWebhook = async (request, response) => {
         processed: result.success,
         message: result.message
       }
-    }).promise();
+    }));
     
     // Always return 200 to acknowledge receipt (even if processing failed)
     // Square will retry based on its own retry policy

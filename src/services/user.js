@@ -1,21 +1,18 @@
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
 
-// Cache AWS clients for connection reuse
-let dynamoDbClient = null;
-const getDynamoDb = () => {
-  if (!dynamoDbClient) {
-    const options = process.env.IS_OFFLINE === 'true' ? 
-      { region: 'localhost', endpoint: 'http://localhost:8000' } : 
-      { maxRetries: 3 };
-    dynamoDbClient = new AWS.DynamoDB.DocumentClient(options);
-  }
-  return dynamoDbClient;
-};
+// Configure AWS DynamoDB client
+const client = new DynamoDBClient({
+  maxAttempts: 3,
+  requestTimeout: 3000,
+  region: process.env.AWS_REGION
+});
 
-// Get table name with environment-specific suffix
+const dynamoDb = DynamoDBDocumentClient.from(client);
+
+// Get table name
 const getTableName = (baseName) => {
-  const stage = process.env.NODE_ENV || 'development';
-  return `${baseName}-v3-${stage}`;
+  return `${baseName}-v3-production`;
 };
 
 /**
@@ -26,7 +23,6 @@ exports.getMerchantById = async (merchantId) => {
     throw new Error('Merchant ID is required');
   }
 
-  const dynamoDb = getDynamoDb();
   const params = {
     TableName: getTableName('joylabs-merchants'),
     Key: {
@@ -35,7 +31,7 @@ exports.getMerchantById = async (merchantId) => {
   };
 
   try {
-    const result = await dynamoDb.get(params).promise();
+    const result = await dynamoDb.send(new GetCommand(params));
     return result.Item;
   } catch (error) {
     console.error(`Error getting merchant ${merchantId}:`, error);
@@ -72,10 +68,10 @@ exports.createMerchant = async (merchantId, accessToken, refreshToken, expiresAt
   };
 
   try {
-    await dynamoDb.put(params).promise();
+    await dynamoDb.send(new PutCommand(params));
     return item;
   } catch (error) {
-    if (error.code === 'ConditionalCheckFailedException') {
+    if (error.name === 'ConditionalCheckFailedException') {
       throw new Error(`Merchant with ID ${merchantId} already exists`);
     }
     console.error(`Error creating merchant ${merchantId}:`, error);
@@ -112,7 +108,7 @@ exports.updateMerchantTokens = async (merchantId, accessToken, refreshToken, exp
   };
 
   try {
-    const result = await dynamoDb.update(params).promise();
+    const result = await dynamoDb.send(new UpdateCommand(params));
     return result.Attributes;
   } catch (error) {
     console.error(`Error updating merchant ${merchantId}:`, error);
@@ -131,7 +127,7 @@ exports.listMerchants = async (limit = 100) => {
   };
 
   try {
-    const result = await dynamoDb.scan(params).promise();
+    const result = await dynamoDb.send(new ScanCommand(params));
     return result.Items;
   } catch (error) {
     console.error('Error listing merchants:', error);
@@ -156,7 +152,7 @@ exports.deleteMerchant = async (merchantId) => {
   };
 
   try {
-    await dynamoDb.delete(params).promise();
+    await dynamoDb.send(new DeleteCommand(params));
     return { success: true, message: `Merchant ${merchantId} deleted successfully` };
   } catch (error) {
     console.error(`Error deleting merchant ${merchantId}:`, error);

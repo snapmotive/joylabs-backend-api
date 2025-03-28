@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# This script deploys the JoyLabs backend API to AWS
+# Set colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
 
 echo "Deploying JoyLabs AWS Backend..."
 
@@ -23,30 +27,40 @@ echo "Checking AWS credentials..."
 aws sts get-caller-identity
 
 if [ $? -ne 0 ]; then
-    echo "AWS credentials are not configured properly. Please run 'aws configure'."
+    echo -e "${RED}Error: AWS credentials not configured properly${NC}"
     exit 1
 fi
 
-# Deploy using Serverless Framework
+# Deploy with Serverless Framework
 echo "Deploying with Serverless Framework..."
 npm run deploy:prod
 
 # Check if deployment was successful
 if [ $? -ne 0 ]; then
-    echo "Deployment failed. Please check the error messages above."
+    echo -e "${RED}Deployment failed!${NC}"
     exit 1
 fi
 
-echo "Deployment completed successfully!"
-echo "Your API is now available at: https://ux8uq7hd24.execute-api.us-west-1.amazonaws.com/production/"
-echo ""
-echo "Note: The v3 service has been deployed - all tables and resources have v3 suffixes."
+echo -e "${GREEN}Deployment completed successfully!${NC}"
 
-# Load environment variables
-source .env.production
+# Get the API Gateway URL from the serverless output file
+API_URL=$(grep -o 'https://[a-zA-Z0-9]*\.execute-api\.[a-z0-9\-]*\.amazonaws\.com/production/' .serverless/serverless-state.json | head -1)
 
-echo "Remember to update your Square Developer Console with the new redirect URL:"
-echo "$SQUARE_REDIRECT_URL"
-echo ""
-echo "To test the OAuth flow locally:"
-echo "npm run test:oauth" 
+if [ -z "$API_URL" ]; then
+    # Fallback to the known URL if we can't extract it
+    API_URL="https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/"
+fi
+
+echo -e "Your API is now available at: ${GREEN}${API_URL}${NC}"
+
+# Get the correct callback URL
+CALLBACK_URL="${API_URL}api/auth/square/callback"
+# Clean up any double slashes while preserving https://
+CALLBACK_URL=$(echo $CALLBACK_URL | sed 's#\([^:]\)//\+#\1/#g')
+
+echo -e "${YELLOW}Note: The v3 service has been deployed - all tables and resources have v3 suffixes.${NC}"
+echo -e "Remember to update your Square Developer Console with the new redirect URL:"
+echo -e "${GREEN}${CALLBACK_URL}${NC}"
+
+echo -e "To test the OAuth flow locally:"
+echo -e "${YELLOW}npm run test:oauth${NC}" 

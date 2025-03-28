@@ -5,7 +5,7 @@
  * without exposing the credentials in shell history or environment variables.
  */
 require('dotenv').config();
-const AWS = require('aws-sdk');
+const { SecretsManagerClient, GetSecretValueCommand, UpdateSecretCommand, CreateSecretCommand, DescribeSecretCommand } = require('@aws-sdk/client-secrets-manager');
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
@@ -45,11 +45,8 @@ async function updateSecrets() {
     const region = args.region || process.env.AWS_REGION || 'us-west-1';
     console.log(`Using AWS region: ${region}`);
     
-    // Configure AWS SDK
-    AWS.config.update({ region });
-    
     // Create Secrets Manager client
-    const secretsManager = new AWS.SecretsManager();
+    const secretsManager = new SecretsManagerClient({ region });
     
     // Get the secret name from environment variables
     const secretName = process.env.SQUARE_CREDENTIALS_SECRET || `square-credentials-${stage}`;
@@ -88,10 +85,10 @@ async function updateSecrets() {
     // Check if secret exists
     let secretExists = false;
     try {
-      await secretsManager.describeSecret({ SecretId: secretName }).promise();
+      await secretsManager.send(new DescribeSecretCommand({ SecretId: secretName }));
       secretExists = true;
     } catch (error) {
-      if (error.code !== 'ResourceNotFoundException') {
+      if (error.name !== 'ResourceNotFoundException') {
         throw error;
       }
     }
@@ -99,17 +96,17 @@ async function updateSecrets() {
     // Update or create secret
     if (secretExists) {
       console.log(`Updating existing secret: ${secretName}`);
-      await secretsManager.updateSecret({
+      await secretsManager.send(new UpdateSecretCommand({
         SecretId: secretName,
         SecretString: secretValue
-      }).promise();
+      }));
     } else {
       console.log(`Creating new secret: ${secretName}`);
-      await secretsManager.createSecret({
+      await secretsManager.send(new CreateSecretCommand({
         Name: secretName,
         Description: `Square API credentials for ${stage}`,
         SecretString: secretValue
-      }).promise();
+      }));
     }
     
     console.log('\n✅ Square credentials successfully updated in AWS Secrets Manager!');

@@ -1,14 +1,15 @@
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, ScanCommand, GetCommand, QueryCommand, PutCommand, UpdateCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 // Configure AWS
-const dynamoDb = process.env.IS_OFFLINE === 'true'
-  ? new AWS.DynamoDB.DocumentClient({
-      region: 'localhost',
-      endpoint: 'http://localhost:8000'
-    })
-  : new AWS.DynamoDB.DocumentClient();
+const client = new DynamoDBClient({
+  maxAttempts: 3,
+  requestTimeout: 3000,
+  region: process.env.AWS_REGION
+});
 
+const dynamoDb = DynamoDBDocumentClient.from(client);
 const productsTable = process.env.PRODUCTS_TABLE;
 
 /**
@@ -23,7 +24,7 @@ const ProductService = {
       TableName: productsTable
     };
 
-    const result = await dynamoDb.scan(params).promise();
+    const result = await dynamoDb.send(new ScanCommand(params));
     return result.Items;
   },
 
@@ -37,7 +38,7 @@ const ProductService = {
       Key: { id }
     };
 
-    const result = await dynamoDb.get(params).promise();
+    const result = await dynamoDb.send(new GetCommand(params));
     return result.Item;
   },
 
@@ -53,7 +54,7 @@ const ProductService = {
       ExpressionAttributeValues: { ':sku': sku }
     };
 
-    const result = await dynamoDb.query(params).promise();
+    const result = await dynamoDb.send(new QueryCommand(params));
     return result.Items[0];
   },
 
@@ -69,7 +70,7 @@ const ProductService = {
       ExpressionAttributeValues: { ':barcode': barcode }
     };
 
-    const result = await dynamoDb.query(params).promise();
+    const result = await dynamoDb.send(new QueryCommand(params));
     return result.Items[0];
   },
 
@@ -92,7 +93,7 @@ const ProductService = {
       Item: newProduct
     };
 
-    await dynamoDb.put(params).promise();
+    await dynamoDb.send(new PutCommand(params));
     return newProduct;
   },
 
@@ -127,7 +128,7 @@ const ProductService = {
       ReturnValues: 'ALL_NEW'
     };
 
-    const result = await dynamoDb.update(params).promise();
+    const result = await dynamoDb.send(new UpdateCommand(params));
     return result.Attributes;
   },
 
@@ -141,7 +142,7 @@ const ProductService = {
       Key: { id }
     };
 
-    return dynamoDb.delete(params).promise();
+    return dynamoDb.send(new DeleteCommand(params));
   },
 
   /**
@@ -160,7 +161,7 @@ const ProductService = {
       }
     };
 
-    const result = await dynamoDb.scan(params).promise();
+    const result = await dynamoDb.send(new ScanCommand(params));
     return result.Items;
   }
 };

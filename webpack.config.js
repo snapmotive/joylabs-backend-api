@@ -16,8 +16,10 @@ module.exports = {
   externals: [
     nodeExternals({
       // Layer dependencies - explicitly exclude these from the bundle
-      allowlist: [], // Include nothing from node_modules
-      modulesFromFile: true, // Use package.json's dependencies
+      modulesFromFile: {
+        include: ['dependencies']
+      },
+      allowlist: [] // Don't include any node_modules in the bundle
     }),
   ],
   module: {

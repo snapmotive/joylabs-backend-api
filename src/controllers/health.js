@@ -1,4 +1,5 @@
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, ScanCommand, ListTablesCommand } = require('@aws-sdk/lib-dynamodb');
 
 /**
  * Basic health check endpoint
@@ -37,12 +38,14 @@ async function checkDetailedHealth(req, res) {
     };
 
     // Check DynamoDB connection
-    const dynamoDb = process.env.IS_OFFLINE === 'true'
-      ? new AWS.DynamoDB.DocumentClient({
+    const client = process.env.IS_OFFLINE === 'true'
+      ? new DynamoDBClient({
           region: 'localhost',
           endpoint: 'http://localhost:8000'
         })
-      : new AWS.DynamoDB.DocumentClient();
+      : new DynamoDBClient({ region: process.env.AWS_REGION });
+
+    const dynamoDb = DynamoDBDocumentClient.from(client);
 
     try {
       // List tables to check connection
@@ -53,12 +56,11 @@ async function checkDetailedHealth(req, res) {
           TableName: USERS_TABLE,
           Limit: 1
         };
-        await dynamoDb.scan(params).promise();
+        await dynamoDb.send(new ScanCommand(params));
         results.dynamoDB = { status: 'ok', message: 'Connected to local DynamoDB' };
       } else {
         // For AWS DynamoDB, check the service
-        const dynamoDBClient = new AWS.DynamoDB();
-        const tables = await dynamoDBClient.listTables({}).promise();
+        const tables = await dynamoDb.send(new ListTablesCommand({}));
         results.dynamoDB = { 
           status: 'ok', 
           message: 'Connected to AWS DynamoDB',

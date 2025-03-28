@@ -1,15 +1,31 @@
 {
-  "name": "joylabs-dependencies-layer",
+  "name": "joylabs-backend-api-v3",
   "version": "1.0.0",
-  "description": "Common dependencies for JoyLabs backend",
+  "description": "JoyLabs Backend API v3",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "serverless offline start",
+    "deploy": "serverless deploy",
+    "test": "jest",
+    "lint": "eslint src/**/*.js",
+    "format": "prettier --write src/**/*.js"
+  },
+  "keywords": [
+    "serverless",
+    "aws",
+    "lambda",
+    "api"
+  ],
+  "author": "JoyLabs",
+  "license": "MIT",
   "dependencies": {
-    "aws-sdk": "^2.1499.0",
+    "@aws-sdk/client-dynamodb": "^3.529.1",
+    "@aws-sdk/client-secrets-manager": "^3.529.1",
+    "@aws-sdk/lib-dynamodb": "^3.529.1",
     "axios": "^1.8.4",
-    "buffer": "^6.0.3",
     "connect-dynamodb": "^3.0.5",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
-    "crypto": "^1.0.1",
     "dotenv": "^16.4.7",
     "express": "^4.18.2",
     "express-session": "^1.18.1",
@@ -17,6 +33,15 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "serverless-http": "^3.2.0",
+    "square": "^33.1.0",
     "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.5",
+    "serverless": "^3.38.0",
+    "serverless-dynamodb-local": "^0.2.40",
+    "serverless-offline": "^13.3.3"
   }
-} 
+}

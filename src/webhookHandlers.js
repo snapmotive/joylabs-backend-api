@@ -18,8 +18,8 @@ app.use(cors({
   maxAge: 86400 // Cache CORS preflight requests for 24 hours
 }));
 
-// Enhanced logging for webhooks
-app.use(morgan('dev'));
+// Production logging
+app.use(morgan('combined'));
 app.use(express.json({ 
   limit: '1mb',
   verify: (req, res, buf) => {
@@ -108,7 +108,7 @@ app.post('/api/webhooks/square', async (req, res) => {
     console.error('Stack trace:', error.stack);
     res.status(500).json({ 
       error: 'An error occurred processing the webhook',
-      detail: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      detail: 'Internal server error'
     });
   }
 });
@@ -118,7 +118,7 @@ app.get('/api/webhooks/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
     message: 'Webhook service is running',
-    environment: process.env.NODE_ENV
+    environment: 'production'
   });
 });
 

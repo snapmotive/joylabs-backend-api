@@ -1,21 +1,23 @@
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 
 // Cache AWS clients for connection reuse
 let dynamoDbClient = null;
 const getDynamoDb = () => {
   if (!dynamoDbClient) {
-    const options = process.env.IS_OFFLINE === 'true' ? 
-      { region: 'localhost', endpoint: 'http://localhost:8000' } : 
-      { maxRetries: 3 };
-    dynamoDbClient = new AWS.DynamoDB.DocumentClient(options);
+    const client = new DynamoDBClient({
+      maxAttempts: 3,
+      requestTimeout: 3000,
+      region: process.env.AWS_REGION
+    });
+    dynamoDbClient = DynamoDBDocumentClient.from(client);
   }
   return dynamoDbClient;
 };
 
 // Get table name with environment-specific suffix
 const getTableName = (baseName) => {
-  const stage = process.env.NODE_ENV || 'development';
-  return `${baseName}-v3-${stage}`;
+  return `${baseName}-v3-production`;
 };
 
 /**
@@ -37,10 +39,10 @@ exports.storeWebhookEvent = async (event) => {
     ttl: ttl
   };
   
-  await dynamoDb.put({
+  await dynamoDb.send(new PutCommand({
     TableName: getTableName('joylabs-webhooks'),
     Item: item
-  }).promise();
+  }));
   
   console.log(`Stored webhook event: ${item.id}`);
   return item.id;
@@ -103,7 +105,7 @@ async function updateWebhookStatus(eventId, status, errorMessage = null) {
     };
     
     console.log(`Looking up webhook with eventId: ${eventId}`);
-    const result = await dynamoDb.query(queryParams).promise();
+    const result = await dynamoDb.send(new QueryCommand(queryParams));
     
     if (result.Items && result.Items.length > 0) {
       const webhook = result.Items[0];
@@ -123,7 +125,7 @@ async function updateWebhookStatus(eventId, status, errorMessage = null) {
       }
     };
     
-    const scanResult = await dynamoDb.scan(scanParams).promise();
+    const scanResult = await dynamoDb.send(new ScanCommand(scanParams));
     
     if (scanResult.Items && scanResult.Items.length > 0) {
       const webhook = scanResult.Items[0];
@@ -164,7 +166,7 @@ async function updateWebhookItem(id, status, timestamp, errorMessage = null) {
     updateParams.ExpressionAttributeValues[':errorMessage'] = errorMessage;
   }
   
-  await dynamoDb.update(updateParams).promise();
+  await dynamoDb.send(new UpdateCommand(updateParams));
 }
 
 /**
