@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/user');
+const { getSquareClient } = require('../services/square');
 
 /**
  * Middleware to protect routes
@@ -7,38 +8,108 @@ const User = require('../models/user');
  */
 async function protect(req, res, next) {
   try {
-    let token;
+    // Get token from header
+    const authHeader = req.headers.authorization;
     
-    // Get token from Authorization header
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
+    // Log auth attempt with sanitized token info
+    console.log('Auth attempt:', {
+      path: req.path,
+      hasToken: !!authHeader,
+      tokenPreview: authHeader ? 
+        `${authHeader.substring(0, 12)}...${authHeader.substring(authHeader.length - 5)}` : 
+        'none'
+    });
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('Auth failed: No bearer token provided');
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed - No bearer token provided',
+        error: 'Missing or invalid authorization header'
+      });
     }
-    
-    // Check if token exists
+
+    // Extract token
+    const token = authHeader.split(' ')[1];
     if (!token) {
-      return res.status(401).json({ error: 'Unauthorized - No token provided' });
+      console.log('Auth failed: Empty token');
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed - Empty token',
+        error: 'Empty token provided'
+      });
     }
-    
+
     try {
-      // Verify token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      // Initialize Square client with the token
+      console.log('Validating Square access token...');
+      const squareClient = getSquareClient(token);
       
-      // Get user from database
-      const user = await User.getUser(decoded.userId);
+      // Attempt to validate the token by making a lightweight API call
+      // This will throw an error if the token is invalid
+      const { result } = await squareClient.merchantsApi.retrieveMerchant('me');
       
-      if (!user) {
-        return res.status(401).json({ error: 'Unauthorized - User no longer exists' });
+      if (!result || !result.merchant || !result.merchant.id) {
+        console.error('Auth failed: Invalid Square response', { 
+          hasResult: !!result,
+          hasMerchant: result && !!result.merchant
+        });
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication failed - Invalid merchant data',
+          error: 'Invalid merchant data from Square API'
+        });
       }
-      
-      // Attach user to request
-      req.user = user;
+
+      // Add the user info to the request object
+      req.user = {
+        merchantId: result.merchant.id,
+        squareAccessToken: token,
+        businessName: result.merchant.business_name || result.merchant.business_email || 'Unknown',
+        countryCode: result.merchant.country,
+        languageCode: result.merchant.language_code
+      };
+
+      console.log('Auth successful:', { 
+        merchantId: result.merchant.id,
+        businessName: req.user.businessName,
+        path: req.path 
+      });
+
+      // Call the next middleware
       next();
     } catch (error) {
-      return res.status(401).json({ error: 'Unauthorized - Invalid token' });
+      // Handle different types of auth errors
+      console.error('Square API auth error:', {
+        name: error.name,
+        message: error.message,
+        status: error.statusCode,
+        path: req.path,
+        tokenFirstFiveChars: token.substring(0, 5)
+      });
+
+      // Check if it's a permissions error
+      if (error.message && error.message.includes('permission')) {
+        return res.status(403).json({
+          success: false,
+          message: 'Authentication failed - Insufficient permissions',
+          error: 'The provided token does not have the required permissions'
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed - Invalid token',
+        error: error.message || 'Failed to validate Square token'
+      });
     }
   } catch (error) {
-    console.error('Auth middleware error:', error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Unexpected auth error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error during authentication',
+      error: error.message
+    });
   }
 }
 

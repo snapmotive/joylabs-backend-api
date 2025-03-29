@@ -1,0 +1,84 @@
+service: joylabs-catalog-service
+
+plugins:
+  - serverless-offline
+  - serverless-dotenv-plugin
+
+custom:
+  dotenv:
+    path: .env.production
+  squareCredentialsSecret: square-credentials-production
+  squareCredentialsSecretArn: arn:aws:secretsmanager:${aws:region}:${aws:accountId}:secret:square-credentials-production-*
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-west-1
+  stage: ${opt:stage, 'production'}
+  memorySize: 512
+  timeout: 30
+  environment:
+    NODE_ENV: production
+    SQUARE_CREDENTIALS_SECRET: square-credentials-production
+    LOG_LEVEL: debug
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource:
+            - arn:aws:secretsmanager:us-west-1:*:secret:square-credentials-production
+            - ${self:custom.squareCredentialsSecretArn}
+        - Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+          Resource:
+            - arn:aws:logs:us-west-1:*:log-group:/aws/lambda/joylabs-catalog-service-production*
+
+# Packaging options
+package:
+  individually: true
+  patterns:
+    - '!node_modules/**'
+    - '!src/**'
+    - '!**'
+
+functions:
+  catalog:
+    handler: catalog-handler.handler
+    description: Minimal catalog API handler with direct Square API access
+    package:
+      include:
+        - catalog-handler.js
+        - node_modules/axios/**
+    events:
+      - http:
+          path: /v2/catalog/list
+          method: get
+          cors: true
+      - http:
+          path: /v2/catalog/item/{id}
+          method: get
+          cors: true
+      - http:
+          path: /v2/catalog/search
+          method: post
+          cors: true
+      # Legacy path support
+      - http:
+          path: /api/catalog/list
+          method: get
+          cors: true
+      - http:
+          path: /api/catalog/item/{id}
+          method: get
+          cors: true
+      - http:
+          path: /api/catalog/search
+          method: post
+          cors: true 

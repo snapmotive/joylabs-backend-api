@@ -1,0 +1,12 @@
+{
+  "name": "joylabs-catalog-service",
+  "version": "1.0.0",
+  "description": "Minimal catalog service for JoyLabs",
+  "main": "catalog-handler.js",
+  "dependencies": {
+    "axios": "^1.6.2"
+  },
+  "scripts": {
+    "deploy": "serverless deploy --config catalog-service.yml"
+  }
+} 

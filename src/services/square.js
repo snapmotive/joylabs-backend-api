@@ -4,63 +4,27 @@
  */
 const axios = require('axios');
 const crypto = require('crypto');
-const { SquareClient } = require('square');
+const { Client } = require('square');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
-const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
-const { WebhooksHelper } = require('@square/webhooks');
 
 // Initialize AWS clients
-const secretsManager = new SecretsManagerClient({ region: process.env.AWS_REGION });
-const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
-const dynamoDb = DynamoDBDocumentClient.from(dynamoClient);
+const secretsManager = new SecretsManagerClient({ region: 'us-west-1' });
 
 // Cache for Square credentials and clients
 let squareCredentials = null;
 const squareClientCache = new Map();
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
-const CREDENTIALS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours for credentials
 
 // Cache AWS clients for connection reuse
 let secretsClient = null;
 const getSecretsClient = () => {
   if (!secretsClient) {
     secretsClient = new SecretsManagerClient({
-      region: process.env.AWS_REGION
+      region: 'us-west-1'
     });
   }
   return secretsClient;
 };
-
-/**
- * Cache wrapper for frequently used functions
- */
-function withCache(fn, cacheKey, ttl = CACHE_TTL) {
-  const cache = new Map();
-  
-  return async (...args) => {
-    const key = `${cacheKey}:${JSON.stringify(args)}`;
-    const now = Date.now();
-    
-    if (cache.has(key)) {
-      const { value, expires } = cache.get(key);
-      if (now < expires) {
-        console.log(`Cache hit for ${cacheKey}`);
-        return value;
-      }
-      console.log(`Cache expired for ${cacheKey}`);
-      cache.delete(key);
-    }
-    
-    const result = await fn(...args);
-    cache.set(key, {
-      value: result,
-      expires: now + ttl
-    });
-    
-    return result;
-  };
-}
 
 /**
  * Retrieve Square credentials
@@ -69,23 +33,24 @@ function withCache(fn, cacheKey, ttl = CACHE_TTL) {
 async function getSquareCredentials() {
   try {
     console.log('Retrieving Square credentials from AWS Secrets Manager');
+    console.log('SQUARE_CREDENTIALS_SECRET:', process.env.SQUARE_CREDENTIALS_SECRET);
+    console.log('AWS_REGION:', process.env.AWS_REGION);
     
     const client = getSecretsClient();
     const command = new GetSecretValueCommand({
-      SecretId: process.env.SQUARE_CREDENTIALS_SECRET
+      SecretId: process.env.SQUARE_CREDENTIALS_SECRET || 'square-credentials-production'
     });
     
     const response = await client.send(command);
     const credentials = JSON.parse(response.SecretString);
     
-    if (!credentials.application_id || !credentials.application_secret) {
+    if (!credentials.applicationId || !credentials.applicationSecret) {
       throw new Error('Invalid Square credentials format');
     }
-    
+      
     return {
-      applicationId: credentials.application_id,
-      applicationSecret: credentials.application_secret,
-      webhookSignatureKey: credentials.webhook_signature_key
+      applicationId: credentials.applicationId,
+      applicationSecret: credentials.applicationSecret
     };
   } catch (error) {
     console.error('Error getting Square credentials:', error);
@@ -106,9 +71,9 @@ const getSquareClient = (accessToken = null) => {
   
   console.log('Creating new Square client');
   
-  const client = new SquareClient({
+  const client = new Client({
     accessToken: accessToken || process.env.SQUARE_ACCESS_TOKEN,
-    environment: process.env.SQUARE_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'production',
+    environment: 'production',
     userAgentDetail: 'JoyLabs Backend API'
   });
   
@@ -138,365 +103,164 @@ function generateStateParam() {
 
 /**
  * Generate a code verifier for PKCE
+ * Must be between 43-128 chars, URL safe base64
  */
 function generateCodeVerifier() {
-  return generateRandomString(64);
+  // Generate 32 bytes of random data (will result in 43 chars when base64url encoded)
+  const randomBytes = crypto.randomBytes(32);
+  return base64URLEncode(randomBytes);
 }
 
 /**
  * Generate a code challenge from a code verifier
+ * Must be base64URL(SHA256(code_verifier))
  */
 function generateCodeChallenge(codeVerifier) {
-  const hash = crypto.createHash('sha256').update(codeVerifier).digest('base64');
-  return hash
-    .replace(/=/g, '')
+  const hash = crypto.createHash('sha256')
+    .update(codeVerifier)
+    .digest();
+  return base64URLEncode(hash);
+}
+
+/**
+ * Base64URL encode a Buffer
+ * Converts to base64 then makes it URL safe
+ */
+function base64URLEncode(buffer) {
+  return buffer.toString('base64')
     .replace(/\+/g, '-')
-    .replace(/\//g, '_');
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
 }
 
 /**
  * Get the OAuth redirect URL
  */
 const getRedirectUrl = () => {
-  const apiGatewayUrl = process.env.API_GATEWAY_URL;
-  if (!apiGatewayUrl) {
-    throw new Error('API_GATEWAY_URL environment variable is required');
-  }
-  
-  const callbackUrl = `${apiGatewayUrl}/api/auth/square/callback`;
-  console.log(`Using redirect URL: ${callbackUrl}`);
-  return callbackUrl;
+  const redirectUrl = process.env.SQUARE_REDIRECT_URL || 'https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback';
+  console.log(`Using redirect URL: ${redirectUrl}`);
+  return redirectUrl;
 };
 
 /**
- * Validate redirect URI to ensure it's allowed
- */
-function validateRedirectUri(redirect_uri) {
-  const allowedRedirectUris = [
-    'https://auth.expo.io/@snapmotive/joylabs',  // Expo AuthSession proxy
-    'joylabs://square-callback',                  // Direct deep link
-    process.env.SQUARE_REDIRECT_URL               // Backend callback URL
-  ].filter(Boolean); // Remove any undefined values
-
-  if (!allowedRedirectUris.includes(redirect_uri)) {
-    console.error('Invalid redirect URI:', redirect_uri);
-    console.error('Must be one of:', allowedRedirectUris);
-    throw new Error('Invalid redirect URI');
-  }
-
-  return true;
-}
-
-/**
- * Generate OAuth URL with PKCE
+ * Generate OAuth URL for Square authorization
+ * @param {string} state - State parameter for CSRF protection
+ * @param {string} code_challenge - PKCE code challenge
+ * @param {string} redirect_uri - The redirect URI for OAuth callback
+ * @returns {Promise<string>} The OAuth URL
  */
 async function generateOAuthUrl(state, code_challenge, redirect_uri) {
   try {
-    // Validate redirect URI
-    validateRedirectUri(redirect_uri);
-    
     const credentials = await getSquareCredentials();
-    const client = getSquareClient();
+    const baseUrl = 'https://connect.squareup.com/oauth2/authorize';
     
     const params = new URLSearchParams({
       client_id: credentials.applicationId,
       response_type: 'code',
-      scope: 'MERCHANT_PROFILE_READ ITEMS_READ ITEMS_WRITE ORDERS_READ ORDERS_WRITE PAYMENTS_READ PAYMENTS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE INVENTORY_READ INVENTORY_WRITE',
+      scope: 'ITEMS_READ ITEMS_WRITE MERCHANT_PROFILE_READ',
       state,
       code_challenge,
       code_challenge_method: 'S256',
-      redirect_uri
+      redirect_uri: getRedirectUrl()
     });
 
-    const authUrl = `${process.env.SQUARE_AUTH_URL}?${params.toString()}`;
-    console.log('Generated OAuth URL:', authUrl);
+    const url = `${baseUrl}?${params.toString()}`;
+    console.log('Generated OAuth URL (redacted):', url.replace(code_challenge, '[REDACTED]'));
     
-    return authUrl;
+    return url;
   } catch (error) {
     console.error('Error generating OAuth URL:', error);
-    throw new Error('Failed to generate OAuth URL');
+    throw error;
   }
 }
 
 /**
- * Exchange authorization code for OAuth token
+ * Exchange authorization code for access token
+ * @param {string} code - The authorization code from Square
+ * @param {string} code_verifier - The PKCE code verifier used in the initial request
+ * @returns {Promise<Object>} The token response
  */
-async function exchangeCodeForToken(code, code_verifier, redirect_uri) {
-  console.log('Exchanging code for token with PKCE...');
-  
+async function exchangeCodeForToken(code, code_verifier) {
   try {
-    // Validate redirect URI
-    validateRedirectUri(redirect_uri);
-    
     const credentials = await getSquareCredentials();
-    const client = getSquareClient();
+    const redirectUrl = getRedirectUrl();
     
-    const response = await client.oAuthApi.obtainToken({
+    console.log('Exchanging code for token with redirect URL:', redirectUrl);
+    console.log('PKCE status:', {
+      hasCodeVerifier: !!code_verifier,
+      codeVerifierLength: code_verifier ? code_verifier.length : 0,
+      codeVerifierPreview: code_verifier ? `${code_verifier.substring(0, 5)}...${code_verifier.substring(code_verifier.length - 5)}` : 'none'
+    });
+    
+    // Prepare request body with or without code_verifier
+    const requestBody = {
       client_id: credentials.applicationId,
-      client_secret: credentials.applicationSecret,
       code,
-      code_verifier,
-      redirect_uri,
-      grant_type: 'authorization_code'
-    });
-    
-    if (!response.result || !response.result.access_token) {
-      throw new Error('Invalid token response');
-    }
-    
-    const { access_token, refresh_token, expires_at, merchant_id } = response.result;
-    
-    return {
-      access_token,
-      refresh_token,
-      expires_at: new Date(expires_at).getTime(),
-      merchant_id
-    };
-  } catch (error) {
-    console.error('Error exchanging code for token:', error);
-    throw error;
-  }
-}
-
-/**
- * Refresh Square OAuth token
- */
-async function refreshToken(refreshToken) {
-  const credentials = await getSquareCredentials();
-  const baseUrl = 'https://connect.squareup.com';
-  
-  try {
-    const response = await axios.post(`${baseUrl}/oauth2/token`, {
-      client_id: credentials.applicationId,
-      client_secret: credentials.applicationSecret,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token'
-    });
-    
-    const result = {
-      ...response.data,
-      refreshed_at: new Date().toISOString()
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUrl
     };
     
-    console.log('Successfully refreshed token');
-    
-    return result;
-  } catch (error) {
-    console.error('Error refreshing token:', error.message);
-    
-    if (error.response) {
-      console.error('Error response:', error.response.data);
-    }
-    
-    throw error;
-  }
-}
-
-/**
- * Revoke Square access token
- */
-async function revokeToken(accessToken) {
-  const credentials = await getSquareCredentials();
-  const baseUrl = 'https://connect.squareup.com';
-
-  try {
-    await axios.post(`${baseUrl}/oauth2/revoke`, {
-      client_id: credentials.applicationId,
-      client_secret: credentials.applicationSecret,
-      access_token: accessToken
-    });
-    
-    return true;
-  } catch (error) {
-    console.error('Error revoking token:', error.response?.data || error.message);
-    return false;
-  }
-}
-
-/**
- * Test Square connection and get merchant information
- */
-const testSquareConnection = async (accessToken) => {
-  console.log('Testing Square connection');
-  try {
-    const response = await fetch('https://connect.squareup.com/v2/merchants/me', {
-      method: 'GET',
-      headers: {
-        'Square-Version': '2023-12-13',
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    const data = await response.json();
-    
-    if (response.ok) {
-      console.log('Connection successful!');
-      console.log('Merchant info:', {
-        id: data.merchant.id,
-        business_name: data.merchant.business_name,
-        country: data.merchant.country,
-        language_code: data.merchant.language_code
-      });
-      return {
-        success: true,
-        merchant: data.merchant
-      };
+    // For PKCE flow (mobile apps), don't include client_secret
+    if (code_verifier) {
+      requestBody.code_verifier = code_verifier;
+      console.log('Added code_verifier to token request - using PKCE flow without client_secret');
     } else {
-      console.error('Connection failed:', data.errors);
-      return {
-        success: false,
-        error: data.errors
-      };
+      // For standard OAuth flow (server-to-server), include client_secret
+      requestBody.client_secret = credentials.applicationSecret;
+      console.log('Using standard OAuth flow with client_secret');
     }
-  } catch (error) {
-    console.error('Connection test error:', error);
+    
+    console.log('Sending token request to Square API');
+    const response = await axios.post('https://connect.squareup.com/oauth2/token', requestBody);
+
+    console.log('Successfully received token response');
+    
     return {
-      success: false,
-      error: error.message
+      access_token: response.data.access_token,
+      refresh_token: response.data.refresh_token,
+      expires_at: response.data.expires_at,
+      merchant_id: response.data.merchant_id
     };
+  } catch (error) {
+    console.error('Error exchanging code for token:', error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || error.message);
   }
-};
+}
 
 /**
- * Get merchant info with caching
+ * Get merchant info
  */
-const getMerchantInfoWithCache = withCache(async (accessToken, merchantId = null) => {
+async function getMerchantInfo(accessToken) {
   try {
     const client = getSquareClient(accessToken);
-    const response = await client.merchantsApi.retrieveMerchant(merchantId || 'me');
+    const response = await client.merchantsApi.retrieveMerchant('me');
     console.log('Successfully retrieved merchant info');
     return response.result.merchant;
   } catch (error) {
     console.error('Error getting merchant info:', error);
     throw error;
   }
-}, 'merchantInfo', 30 * 60 * 1000);
-
-const getMerchantInfo = getMerchantInfoWithCache;
-
-/**
- * Refresh token with retry logic
- */
-async function refreshTokenWithRetry(refreshToken, maxRetries = 3) {
-  let retries = 0;
-  let lastError = null;
-  
-  while (retries < maxRetries) {
-    try {
-      console.log(`Attempting to refresh token (attempt ${retries + 1}/${maxRetries})`);
-      return await refreshToken(refreshToken);
-    } catch (error) {
-      lastError = error;
-      console.error(`Token refresh failed (attempt ${retries + 1}/${maxRetries}):`, error.message);
-      
-      if (error.status && error.status >= 500) {
-        retries++;
-        const delay = Math.pow(2, retries) * 1000;
-        console.log(`Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else if (error.status === 429) {
-        retries++;
-        const delay = Math.pow(2, retries) * 2000;
-        console.log(`Rate limited. Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        throw error;
-      }
-    }
-  }
-  
-  throw lastError;
 }
 
 /**
- * Get axios instance with connection pooling
+ * Execute a Square API request with error handling
+ * @param {Function} requestFn - Function that takes a Square client and returns a promise
+ * @param {string} accessToken - Square access token
+ * @returns {Promise<Object>} - Square API response
  */
-const getAxiosInstance = () => {
-  return axios.create({
-    timeout: 10000,
-    maxRedirects: 5,
-    httpAgent: new require('http').Agent({ keepAlive: true }),
-    httpsAgent: new require('https').Agent({ keepAlive: true })
-  });
-};
-
-/**
- * Verify Square webhook signature
- */
-async function verifyWebhookSignature(signature, body) {
+async function executeSquareRequest(requestFn, accessToken) {
   try {
-    const credentials = await getSquareCredentials();
-    return WebhooksHelper.verifySignature({
-      requestBody: body,
-      signatureHeader: signature,
-      signatureKey: credentials.webhookSignatureKey,
-      notificationUrl: process.env.SQUARE_WEBHOOK_URL
+    const client = getSquareClient(accessToken);
+    return await requestFn(client);
+  } catch (error) {
+    console.error('Square API error:', {
+      message: error.message,
+      code: error.code,
+      statusCode: error.statusCode || 500
     });
-  } catch (error) {
-    console.error('Error verifying webhook signature:', error);
-    return false;
-  }
-}
-
-/**
- * Exchange OAuth authorization code for tokens with PKCE support
- */
-async function getOAuthToken(code, code_verifier = null) {
-  try {
-    console.log(`Exchanging code for token with${code_verifier ? '' : 'out'} PKCE`);
-    const tokenData = await exchangeCodeForToken(code, code_verifier);
-    return {
-      success: true,
-      data: {
-        merchantId: tokenData.merchant_id,
-        accessToken: tokenData.access_token,
-        refreshToken: tokenData.refresh_token,
-        expiresAt: tokenData.expires_at
-      }
-    };
-  } catch (error) {
-    console.error('Error exchanging code for token:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to exchange code for token'
-    };
-  }
-}
-
-/**
- * List catalog items from Square
- */
-async function listCatalog(client, options = {}) {
-  const catalogApi = client.catalogApi;
-  try {
-    console.log('Listing catalog items from Square');
-    const response = await catalogApi.listCatalog(undefined, options.types || 'ITEM,CATEGORY');
-    return response.result;
-  } catch (error) {
-    console.error('Error listing catalog items:', error);
-    throw error;
-  }
-}
-
-/**
- * Cache Square OAuth tokens in DynamoDB
- */
-async function cacheSquareTokens(merchantId, tokens) {
-  try {
-    const params = {
-      TableName: process.env.SQUARE_TOKENS_TABLE || 'square-tokens',
-      Item: {
-        merchantId,
-        ...tokens,
-        updatedAt: new Date().toISOString()
-      }
-    };
-
-    await dynamoDb.send(new PutCommand(params));
-    console.log('Cached Square tokens for merchant:', merchantId);
-  } catch (error) {
-    console.error('Error caching Square tokens:', error);
+    
+    // Rethrow with additional context
+    error.statusCode = error.statusCode || 500;
     throw error;
   }
 }
@@ -511,12 +275,5 @@ module.exports = {
   generateCodeVerifier,
   generateCodeChallenge,
   getSquareCredentials,
-  refreshToken,
-  revokeToken,
-  testSquareConnection,
-  refreshTokenWithRetry,
-  verifyWebhookSignature,
-  getOAuthToken,
-  listCatalog,
-  cacheSquareTokens
+  executeSquareRequest
 };

@@ -1,0 +1,9 @@
+{
+  "name": "joylabs-webhooks-dependencies",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@aws-sdk/client-sns": "^3.775.0",
+    "body-parser": "^1.20.2"
+  }
+} 

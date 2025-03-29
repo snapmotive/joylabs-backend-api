@@ -1,12 +1,41 @@
 service: joylabs-backend-api-v3
 
 plugins:
+  - serverless-webpack
   - serverless-offline
   - serverless-dotenv-plugin
 
 custom:
   dotenv:
     path: .env.production
+  statesTableName: ${self:service}-${self:provider.stage}-states
+  squareCredentialsSecret: square-credentials-production
+  squareCredentialsSecretArn: arn:aws:secretsmanager:${aws:region}:${aws:accountId}:secret:square-credentials-production-*
+  webpack:
+    webpackConfig: 'webpack.config.js'
+    includeModules: 
+      forceExclude:
+        - aws-sdk   # Exclude aws-sdk v2
+    packager: 'npm'
+    excludeFiles: '**/*.test.js'
+    includeFiles:
+      - src/**/*.js
+    packagerOptions:
+      scripts:
+        - rm -rf node_modules/aws-sdk # Ensure aws-sdk is removed before packaging
+    entries:
+      - src/index.js
+      - src/catalogHandlers.js
+      - src/webhookHandlers.js
+      - src/oauthHandlers.js
+  # Layer ARNs for referencing in functions
+  layerArns:
+    core: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-core-production:1
+    apiDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-api-deps-production:1
+    catalogDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-catalog-deps-production:1
+    webhooksDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-webhooks-deps-production:1
+    oauthDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-oauth-deps-production:1
+    square: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-square-production:1
 
 frameworkVersion: '3'
 
@@ -14,7 +43,7 @@ provider:
   name: aws
   runtime: nodejs18.x
   region: us-west-1
-  stage: production
+  stage: ${opt:stage, 'production'}
   memorySize: 512
   timeout: 30
   environment:
@@ -27,7 +56,7 @@ provider:
     SQUARE_TOKEN_URL: https://connect.squareup.com/oauth2/token
     SQUARE_CALLBACK_SCHEME: joylabs
     SQUARE_CALLBACK_PATH: square-callback
-    DYNAMODB_STATES_TABLE: joylabs-backend-api-v3-oauth-states-production
+    STATES_TABLE: ${self:custom.statesTableName}
     SQUARE_CREDENTIALS_SECRET: square-credentials-production
     LOG_LEVEL: debug
   iam:
@@ -44,7 +73,7 @@ provider:
             - dynamodb:CreateTable
             - dynamodb:DescribeTable
           Resource:
-            - arn:aws:dynamodb:us-west-1:*:table/${self:provider.environment.DYNAMODB_STATES_TABLE}
+            - !GetAtt StatesTable.Arn
             - arn:aws:dynamodb:us-west-1:*:table/joylabs-backend-api-v3-users-production
             - arn:aws:dynamodb:us-west-1:*:table/joylabs-backend-api-v3-sessions-production
             - arn:aws:dynamodb:us-west-1:*:table/joylabs-catalog-products-v3-production
@@ -56,6 +85,7 @@ provider:
             - secretsmanager:GetSecretValue
           Resource:
             - arn:aws:secretsmanager:us-west-1:*:secret:square-credentials-production
+            - ${self:custom.squareCredentialsSecretArn}
         - Effect: Allow
           Action:
             - logs:CreateLogGroup
@@ -65,6 +95,8 @@ provider:
             - arn:aws:logs:us-west-1:*:log-group:/aws/lambda/joylabs-backend-api-v3-production*
 
 package:
+  individually: true
+  excludeDevDependencies: true
   patterns:
     - '!node_modules/**'
     - '!layers/**'
@@ -72,9 +104,14 @@ package:
     - '!.serverless/**'
     - '!test/**'
     - '!scripts/**'
+    - '!joylabs-firebase/**'
+    - '!unused-firebase-files/**'
     - '!*.test.js'
     - '!*.md'
     - '!package-lock.json'
+    - '!node_modules/aws-sdk/**' 
+    - '!**/node_modules/aws-sdk/**'
+    - '!**/*.map'
     - 'src/**'
 
 functions:
@@ -83,75 +120,102 @@ functions:
     events:
       - http:
           path: /api/health
-          method: GET
+          method: get
           cors: true
       - http:
           path: /api/auth/connect/url
-          method: GET
+          method: get
           cors: true
       - http:
           path: /api/auth/register-state
-          method: POST
+          method: post
           cors: true
       - http:
           path: /{proxy+}
-          method: ANY
+          method: any
           cors: true
     layers:
-      - { Ref: DependenciesLambdaLayer }
-      - { Ref: SquareLambdaLayer }
+      - ${self:custom.layerArns.core}
+      - ${self:custom.layerArns.apiDeps}
+      - ${self:custom.layerArns.square}
+  
+  catalog:
+    handler: src/catalogHandlers.handler
+    description: Dedicated Lambda function for handling catalog-related requests
+    events:
+      - http:
+          path: /v2/catalog/list
+          method: get
+          cors: true
+      - http:
+          path: /v2/catalog/item/{id}
+          method: get
+          cors: true
+      - http:
+          path: /v2/catalog/search
+          method: post
+          cors: true
+      # Legacy path support (for backward compatibility)
+      - http:
+          path: /api/catalog/list
+          method: get
+          cors: true
+      - http:
+          path: /api/catalog/item/{id}
+          method: get
+          cors: true
+      - http:
+          path: /api/catalog/search
+          method: post
+          cors: true
+    layers:
+      - ${self:custom.layerArns.core}
+      - ${self:custom.layerArns.catalogDeps}
+      - ${self:custom.layerArns.square}
   
   webhooks:
-    handler: src/webhookHandlers.squareWebhook
+    handler: src/webhookHandlers.handler
     events:
       - http:
           path: /api/webhooks/square
-          method: POST
+          method: post
           cors: true
       - http:
           path: /api/webhooks/health
-          method: GET
+          method: get
           cors: true
     layers:
-      - { Ref: DependenciesLambdaLayer }
-      - { Ref: SquareLambdaLayer }
+      - ${self:custom.layerArns.core}
+      - ${self:custom.layerArns.webhooksDeps}
+      - ${self:custom.layerArns.square}
 
   oauth:
-    handler: src/oauthHandlers.squareCallback
+    handler: src/oauthHandlers.handler
     events:
       - http:
           path: /api/auth/square/callback
-          method: GET
+          method: get
           cors: true
+    environment:
+      SQUARE_CREDENTIALS_SECRET: ${self:custom.squareCredentialsSecret}
     layers:
-      - { Ref: DependenciesLambdaLayer }
-      - { Ref: SquareLambdaLayer }
-
-layers:
-  dependencies:
-    path: layers/dependencies
-    name: ${self:service}-dependencies-${opt:stage, 'production'}
-    description: Common dependencies for ${self:service}
-  square:
-    path: layers/square
-    name: ${self:service}-square-${opt:stage, 'production'}
-    description: Square SDK
-    compatibleRuntimes:
-      - nodejs18.x 
+      - ${self:custom.layerArns.core}
+      - ${self:custom.layerArns.oauthDeps}
+      - ${self:custom.layerArns.square}
 
 resources:
   Resources:
-    OAuthStatesTable:
+    StatesTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: ${self:provider.environment.DYNAMODB_STATES_TABLE}
+        TableName: ${self:custom.statesTableName}
         AttributeDefinitions:
           - AttributeName: state
             AttributeType: S
         KeySchema:
           - AttributeName: state
             KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
         TimeToLiveSpecification:
           AttributeName: ttl
-          Enabled: true
-        BillingMode: PAY_PER_REQUEST 
+          Enabled: true 

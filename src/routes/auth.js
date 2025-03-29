@@ -8,7 +8,8 @@ const { createUser, findUserBySquareMerchantId, updateUser } = require('../model
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+const { Client, Environment } = require('square');
 
 // Create a temporary memory store for code verifiers
 // Note: In production, consider using a database or Redis for persistence across instances
@@ -129,24 +130,31 @@ router.get('/square', async (req, res) => {
     const codeVerifier = generateCodeVerifier();
     console.log('Generated code verifier for PKCE flow');
     
-    // Store state in memory for validation
-    if (!global.oauthStates) {
-      global.oauthStates = new Map();
-    }
-    
-    // Clean up old states (older than 5 minutes)
-    const now = Date.now();
-    for (const [key, value] of global.oauthStates.entries()) {
-      if (now - value.timestamp > 5 * 60 * 1000) {
-        global.oauthStates.delete(key);
+    // Store state in DynamoDB with TTL
+    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // 10 minutes
+    const params = {
+      TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
+      Item: {
+        state: state,
+        timestamp: Date.now(),
+        used: false,
+        ttl: ttl,
+        code_verifier: codeVerifier,
+        redirectUrl: 'joylabs://square-callback'
       }
-    }
+    };
+
+    console.log('Storing state in DynamoDB:', {
+      tableName: params.TableName,
+      state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
+      ttl: new Date(ttl * 1000).toISOString()
+    });
+
+    const result = await docClient.send(new PutCommand(params));
     
-    // Store new state with timestamp and code verifier
-    global.oauthStates.set(state, {
-      timestamp: now,
-      used: false,
-      codeVerifier: codeVerifier
+    console.log('DynamoDB PutCommand result:', {
+      statusCode: result.$metadata.httpStatusCode,
+      requestId: result.$metadata.requestId
     });
     
     // Set code verifier in cookie for callback
@@ -176,106 +184,200 @@ router.get('/square', async (req, res) => {
   }
 });
 
-// Handle callback from Square - support both GET and POST for Expo AuthSession
-router.all('/square/callback', async (req, res) => {
-  console.log('Square OAuth callback received');
-  
-  // Get parameters from either query (GET) or body (POST)
-  const params = req.method === 'GET' ? req.query : req.body;
-  
-  // Log request details (redacting sensitive info)
-  const redactedParams = { ...params };
-  if (redactedParams.code) {
-    redactedParams.code = redactedParams.code.substring(0, 5) + '...' + 
-                         redactedParams.code.substring(redactedParams.code.length - 5);
-  }
-  if (redactedParams.code_verifier) {
-    redactedParams.code_verifier = redactedParams.code_verifier.substring(0, 5) + '...' + 
-                                  redactedParams.code_verifier.substring(redactedParams.code_verifier.length - 5);
-  }
-  console.log('Callback parameters:', redactedParams);
-  
+/**
+ * Handle Square OAuth callback
+ * Receives the callback from Square, exchanges code for token, then redirects to mobile app
+ */
+router.get('/square/callback', async (req, res) => {
   try {
-    // Extract parameters
-    const { code, code_verifier, redirect_uri, state } = params;
+    const { code, state, error, app_callback } = req.query;
     
-    // Validate required parameters
-    if (!code) {
-      console.error('Missing authorization code');
-      return res.status(400).json({ 
-        error: 'Missing authorization code'
-      });
-    }
-    
-    // If state is provided, validate it
-    if (state && global.oauthStates) {
-      const storedState = global.oauthStates.get(state);
-      if (!storedState) {
-        console.error('Invalid or expired state parameter:', state);
-        return res.status(400).json({ error: 'Invalid or expired state parameter' });
-      }
-      
-      if (storedState.used) {
-        console.error('State has already been used:', state);
-        return res.status(400).json({ error: 'State has already been used' });
-      }
-      
-      // Mark state as used
-      storedState.used = true;
-    }
-    
-    // Exchange code for token using Square SDK
-    console.log('Exchanging code for token...');
-    const tokenData = await exchangeCodeForToken(code, code_verifier, redirect_uri);
-    
-    // Get merchant information
-    console.log('Getting merchant information...');
-    const merchantInfo = await getMerchantInfo(tokenData.access_token);
-    
-    // Find or create user
-    let user = await findUserBySquareMerchantId(merchantInfo.merchant_id);
-    
-    if (!user) {
-      user = await createUser({
-        squareMerchantId: merchantInfo.merchant_id,
-        merchantInfo,
-        tokens: tokenData
-      });
-    } else {
-      await updateUser(user.id, {
-        merchantInfo,
-        tokens: tokenData
-      });
-    }
-    
-    // Generate JWT
-    const jwtToken = jwt.sign(
-      { 
-        userId: user.id,
-        merchantId: merchantInfo.merchant_id
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-    
-    // Clean up used state
-    if (state && global.oauthStates) {
-      global.oauthStates.delete(state);
-    }
-    
-    // Return JSON response for both web and mobile clients
-    res.json({
-      access_token: tokenData.access_token,
-      merchant_id: merchantInfo.merchant_id,
-      merchant_name: merchantInfo.business_name,
-      jwt_token: jwtToken
+    console.log('Square callback received:', {
+      hasCode: !!code,
+      state,
+      hasError: !!error,
+      app_callback,
+      STATES_TABLE: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
+      env_STATES_TABLE: process.env.STATES_TABLE,
+      headers: req.headers,
+      query: req.query
     });
+    
+    if (error) {
+      console.error('Error from Square:', error);
+      return res.redirect(`joylabs://square-callback?error=${encodeURIComponent(error)}`);
+    }
+    
+    if (!code) {
+      console.error('No code provided in Square callback');
+      return res.redirect('joylabs://square-callback?error=missing_code');
+    }
+
+    if (!state) {
+      console.error('No state provided in Square callback');
+      return res.redirect('joylabs://square-callback?error=missing_state');
+    }
+
+    // Retrieve state from DynamoDB
+    const params = {
+      TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
+      Key: {
+        state: state
+      }
+    };
+
+    console.log('Retrieving state data from DynamoDB:', {
+      tableName: params.TableName,
+      state: state,
+      params: {
+        TableName: params.TableName,
+        Key: '(marshalled key)'
+      },
+      region: process.env.AWS_REGION || 'us-west-1'
+    });
+
+    const getResult = await docClient.send(new GetCommand(params));
+    const stateData = getResult.Item;
+
+    console.log('DynamoDB GetItem response:', {
+      hasItem: !!stateData,
+      metadata: getResult.$metadata,
+      region: process.env.AWS_REGION || 'us-west-1',
+      itemKeys: stateData ? Object.keys(stateData) : []
+    });
+
+    if (!stateData) {
+      console.error('Invalid state parameter');
+      return res.redirect('joylabs://square-callback?error=invalid_state');
+    }
+
+    // Get code verifier from state data
+    const codeVerifier = stateData.code_verifier;
+    const redirectUrl = stateData.redirectUrl || 'joylabs://square-callback';
+
+    // Handle missing code verifier
+    if (!codeVerifier) {
+      console.error('No code verifier found for state');
+      
+      // Check if we're dealing with a non-PKCE flow (for backward compatibility)
+      if (stateData.code_challenge) {
+        return res.redirect(`${redirectUrl}?error=missing_code_verifier&details=code_challenge_exists`);
+      }
+
+      // Try to proceed without code verifier (may work for non-PKCE flows)
+      try {
+        // Exchange code for tokens without code verifier
+        const tokenResponse = await squareService.exchangeCodeForToken(code);
+        console.log('Successfully exchanged code for tokens without PKCE');
+
+        // Mark state as used
+        const updateParams = {
+          TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
+          Key: {
+            state: state
+          },
+          UpdateExpression: 'set used = :used',
+          ExpressionAttributeValues: {
+            ':used': true
+          }
+        };
+
+        await docClient.send(new UpdateCommand(updateParams));
+        console.log('Marked state as used in DynamoDB');
+
+        // Get merchant info using the access token
+        const client = new Client({
+          accessToken: tokenResponse.access_token,
+          environment: Environment.Production
+        });
+
+        const { result } = await client.merchantsApi.retrieveMerchant(tokenResponse.merchant_id);
+        console.log('Retrieved merchant info');
+
+        // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
+        const sanitizedBusinessName = encodeURIComponent(result.merchant.businessName || '');
+        const finalRedirectUrl = `joylabs://square-callback?access_token=${encodeURIComponent(tokenResponse.access_token)}&refresh_token=${encodeURIComponent(tokenResponse.refresh_token)}&merchant_id=${encodeURIComponent(tokenResponse.merchant_id)}&business_name=${sanitizedBusinessName}`;
+
+        // Debug logging for redirect URL
+        console.log('DEBUG - Redirect URL details:', {
+          baseUrl: redirectUrl,
+          finalUrl: finalRedirectUrl,
+          manuallyConstructed: true,
+          params: {
+            access_token: `${tokenResponse.access_token.substring(0, 5)}...${tokenResponse.access_token.substring(tokenResponse.access_token.length - 5)}`,
+            refresh_token: `${tokenResponse.refresh_token.substring(0, 5)}...${tokenResponse.refresh_token.substring(tokenResponse.refresh_token.length - 5)}`,
+            merchant_id: tokenResponse.merchant_id,
+            business_name: result.merchant.businessName
+          }
+        });
+
+        console.log('Redirecting to app with tokens:', {
+          redirectUrl: finalRedirectUrl.substring(0, 30) + '...'
+        });
+        return res.redirect(finalRedirectUrl);
+      } catch (error) {
+        console.error('Error in non-PKCE flow:', error);
+        return res.redirect(`${redirectUrl}?error=token_exchange_failed&details=non_pkce_failed&message=${encodeURIComponent(error.message)}`);
+      }
+    }
+
+    try {
+      // Exchange code for tokens
+      const tokenResponse = await squareService.exchangeCodeForToken(code, codeVerifier);
+      console.log('Successfully exchanged code for tokens');
+
+      // Mark state as used
+      const updateParams = {
+        TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
+        Key: {
+          state: state
+        },
+        UpdateExpression: 'set used = :used',
+        ExpressionAttributeValues: {
+          ':used': true
+        }
+      };
+
+      await docClient.send(new UpdateCommand(updateParams));
+      console.log('Marked state as used in DynamoDB');
+
+      // Get merchant info using the access token
+      const client = new Client({
+        accessToken: tokenResponse.access_token,
+        environment: Environment.Production
+      });
+
+      const { result } = await client.merchantsApi.retrieveMerchant(tokenResponse.merchant_id);
+      console.log('Retrieved merchant info');
+
+      // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
+      const sanitizedBusinessName = encodeURIComponent(result.merchant.businessName || '');
+      const finalRedirectUrl = `joylabs://square-callback?access_token=${encodeURIComponent(tokenResponse.access_token)}&refresh_token=${encodeURIComponent(tokenResponse.refresh_token)}&merchant_id=${encodeURIComponent(tokenResponse.merchant_id)}&business_name=${sanitizedBusinessName}`;
+
+      // Debug logging for redirect URL
+      console.log('DEBUG - Redirect URL details:', {
+        baseUrl: redirectUrl,
+        finalUrl: finalRedirectUrl,
+        manuallyConstructed: true,
+        params: {
+          access_token: `${tokenResponse.access_token.substring(0, 5)}...${tokenResponse.access_token.substring(tokenResponse.access_token.length - 5)}`,
+          refresh_token: `${tokenResponse.refresh_token.substring(0, 5)}...${tokenResponse.refresh_token.substring(tokenResponse.refresh_token.length - 5)}`,
+          merchant_id: tokenResponse.merchant_id,
+          business_name: result.merchant.businessName
+        }
+      });
+
+      console.log('Redirecting to app with tokens:', {
+        redirectUrl: finalRedirectUrl.substring(0, 30) + '...'
+      });
+      return res.redirect(finalRedirectUrl);
+    } catch (error) {
+      console.error('Error exchanging code for token:', error);
+      return res.redirect(`${redirectUrl}?error=token_exchange_failed&message=${encodeURIComponent(error.message)}`);
+    }
   } catch (error) {
     console.error('Error in Square callback:', error);
-    res.status(500).json({ 
-      error: 'Failed to exchange token',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    return res.redirect('joylabs://square-callback?error=server_error');
   }
 });
 
@@ -746,26 +848,52 @@ router.post('/register-state', async (req, res) => {
   });
 
   try {
-    const { state } = req.body;
+    const { state, redirectUrl, code_verifier, code_challenge } = req.body;
 
     if (!state) {
       console.error('Missing state parameter in request body');
       return res.status(400).json({ error: 'Missing state parameter' });
     }
+    
+    // Store state in DynamoDB with TTL
+    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // 10 minutes
+    const params = {
+      TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
+      Item: {
+        state: state,
+        timestamp: Date.now(),
+        used: false,
+        ttl: ttl,
+        redirectUrl: redirectUrl || 'joylabs://square-callback'
+      }
+    };
 
-    // Store state in memory with timestamp
-    global.oauthStates.set(state, {
-      timestamp: Date.now(),
-      used: false
+    // Add code_verifier if provided
+    if (code_verifier) {
+      params.Item.code_verifier = code_verifier;
+      console.log('Code verifier included in state registration');
+    } else if (code_challenge) {
+      // If we have a code challenge but no verifier, we're using separate PKCE steps
+      params.Item.code_challenge = code_challenge;
+      console.log('Code challenge included in state registration');
+    } else {
+      console.warn('No code_verifier or code_challenge provided for PKCE flow');
+    }
+
+    console.log('Storing state in DynamoDB:', {
+      tableName: params.TableName,
+      state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
+      ttl: new Date(ttl * 1000).toISOString(),
+      hasCodeVerifier: !!code_verifier,
+      hasCodeChallenge: !!code_challenge
     });
 
-    // Clean up old states (older than 5 minutes)
-    const now = Date.now();
-    for (const [key, value] of global.oauthStates.entries()) {
-      if (now - value.timestamp > 5 * 60 * 1000) {
-        global.oauthStates.delete(key);
-      }
-    }
+    const result = await docClient.send(new PutCommand(params));
+    
+    console.log('DynamoDB PutCommand result:', {
+      statusCode: result.$metadata.httpStatusCode,
+      requestId: result.$metadata.requestId
+    });
 
     console.log(`State ${state} registered successfully`);
     res.status(200).json({ success: true });
@@ -786,38 +914,67 @@ router.get('/connect/url', async (req, res) => {
   });
 
   try {
-    const { state, code_challenge, redirect_uri } = req.query;
-
+    const { state, code_challenge, code_verifier, redirect_uri } = req.query;
+    
     // Validate required parameters
     if (!state || !code_challenge || !redirect_uri) {
       console.error('Missing required parameters:', { state, code_challenge, redirect_uri });
-      return res.status(400).json({
+        return res.status(400).json({ 
         error: 'Missing required parameters',
         details: 'state, code_challenge, and redirect_uri are required'
       });
     }
 
-    // Store state in memory with timestamp
-    global.oauthStates.set(state, {
-      timestamp: Date.now(),
-      used: false,
-      redirect_uri
+    // Validate redirect_uri format for deep linking
+    if (!redirect_uri.startsWith('joylabs://')) {
+      console.error('Invalid redirect_uri format:', redirect_uri);
+        return res.status(400).json({ 
+        error: 'Invalid redirect_uri',
+        details: 'redirect_uri must start with joylabs://'
+      });
+    }
+
+    // Store state in DynamoDB with TTL
+    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // 10 minutes
+    const params = {
+      TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
+      Item: {
+        state: state,
+        timestamp: Date.now(),
+        used: false,
+        ttl: ttl,
+        code_challenge: code_challenge,
+        redirect_uri: redirect_uri
+      }
+    };
+
+    // Store code_verifier if provided (for PKCE)
+    if (code_verifier) {
+      params.Item.code_verifier = code_verifier;
+      console.log('Added code_verifier to state storage');
+    }
+
+    console.log('Storing state in DynamoDB:', {
+      tableName: params.TableName,
+      state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
+      ttl: new Date(ttl * 1000).toISOString(),
+      hasCodeChallenge: true,
+      hasCodeVerifier: !!code_verifier
     });
 
-    // Clean up old states (older than 5 minutes)
-    const now = Date.now();
-    for (const [key, value] of global.oauthStates.entries()) {
-      if (now - value.timestamp > 5 * 60 * 1000) {
-        global.oauthStates.delete(key);
-      }
-    }
+    const result = await docClient.send(new PutCommand(params));
+    
+    console.log('DynamoDB PutCommand result:', {
+      statusCode: result.$metadata.httpStatusCode,
+      requestId: result.$metadata.requestId
+    });
 
     const url = await squareService.generateOAuthUrl(state, code_challenge, redirect_uri);
     console.log('Generated Square OAuth URL');
     res.json({ url });
   } catch (error) {
     console.error('Error generating OAuth URL:', error);
-    res.status(500).json({
+    res.status(500).json({ 
       error: 'Failed to generate OAuth URL',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });

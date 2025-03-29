@@ -1,4 +1,121 @@
-# JoyLabs Backend API
+# JoyLabs Backend API v3
+
+This repository contains the JoyLabs backend API v3, built with Serverless Framework, AWS Lambda, Express, and DynamoDB.
+
+## Layer-Based Architecture
+
+This project uses AWS Lambda Layers to optimize deployment size and improve maintainability. For detailed information on the layer structure and management, see [LAYERS-README.md](LAYERS-README.md).
+
+### Key Benefits
+
+- Smaller function sizes
+- Faster deployments
+- Better organization of dependencies
+- Improved maintainability
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18 or later
+- AWS CLI configured with appropriate credentials
+- Serverless Framework installed globally: `npm install -g serverless`
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+   ```
+   npm install
+   ```
+3. Install layer dependencies:
+   ```
+   npm run install-layers
+   ```
+
+### Local Development
+
+Start the local development server:
+
+```
+npm start
+```
+
+This will start a local server using Serverless Offline.
+
+## Deployment
+
+### Deploy All
+
+To deploy the entire service:
+
+```
+npm run deploy
+```
+
+### Deploy Only Layers
+
+To deploy only the Lambda layers:
+
+```
+npm run deploy:layers
+```
+
+### Deploy a Specific Function
+
+To deploy a specific function:
+
+```
+npm run deploy:function:api     # Deploy API function
+npm run deploy:function:catalog # Deploy Catalog function 
+npm run deploy:function:webhooks # Deploy Webhooks function
+npm run deploy:function:oauth    # Deploy OAuth function
+```
+
+## Managing Layers
+
+### Check Layer Sizes
+
+To check the sizes of all layers:
+
+```
+npm run check-layer-sizes
+```
+
+### Create a New Layer
+
+To create a new layer:
+
+```
+npm run create:layer <layer-name>
+```
+
+Example:
+```
+npm run create:layer analytics
+```
+
+## Project Structure
+
+```
+.
+├── layers/                  # Lambda layers
+│   ├── core/                # Core dependencies used by all functions
+│   ├── api-deps/            # API-specific dependencies
+│   ├── catalog-deps/        # Catalog-specific dependencies
+│   ├── webhooks-deps/       # Webhooks-specific dependencies
+│   ├── oauth-deps/          # OAuth-specific dependencies
+│   └── square/              # Square SDK
+├── scripts/                 # Utility scripts
+├── src/                     # Source code
+├── serverless.yml           # Main Serverless configuration
+├── serverless.layers.yml    # Layers-specific Serverless configuration
+└── webpack.config.js        # Webpack configuration
+```
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Overview
 
@@ -301,54 +418,6 @@ filter @message like "Square callback received"
 4. **DynamoDB Throughput**
    - Cause: Exceeded provisioned capacity
    - Solution: Monitor and adjust capacity or switch to on-demand
-
-## Deployment
-
-This project uses the Serverless Framework for deployment.
-
-### Prerequisites
-
-- Node.js 16+
-- AWS CLI configured with appropriate credentials
-- Serverless Framework installed globally (`npm install -g serverless`)
-
-### Deploy Commands
-
-```bash
-# Install dependencies
-npm install
-
-# Deploy to production
-npm run deploy
-
-# Deploy to development (if configured)
-npm run deploy:dev
-
-# Deploy specific function
-npx serverless deploy function -f oauth
-```
-
-### CI/CD Pipeline
-
-The recommended CI/CD pipeline uses GitHub Actions with these stages:
-1. **Build**: Install dependencies and prepare deployment package
-2. **Test**: Run unit and integration tests
-3. **Deploy**: Deploy to AWS using Serverless Framework
-4. **Verify**: Run post-deployment tests to verify functionality
-
-## Security Considerations
-
-1. **PKCE Flow**: Used instead of implicit flow to enhance security
-2. **State Parameter**: Prevents CSRF attacks
-3. **DynamoDB TTL**: Automatically expires unused states
-4. **JWT Security**: Short-lived tokens with proper signing
-5. **CORS**: Configured to allow only specific origins
-6. **Secrets Management**: API keys stored in AWS Secrets Manager
-7. **Input Validation**: All inputs validated before processing
-
-## License
-
-[MIT License](LICENSE)
 
 ## Contact
 

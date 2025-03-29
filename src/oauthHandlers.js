@@ -20,13 +20,16 @@ const {
 const { authCors } = require('./middleware/cors');
 const { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand } = require('@aws-sdk/client-dynamodb');
 const { marshall, unmarshall } = require('@aws-sdk/util-dynamodb');
+const { Client } = require('square');
+const squareService = require('./services/square');
 
-// Initialize express app for the lambda handler
 const app = express();
+const dynamoDb = new DynamoDBClient();
 
-// Initialize DynamoDB client
-const dynamoDb = new DynamoDBClient({ region: process.env.AWS_REGION });
-const STATES_TABLE = process.env.DYNAMODB_STATES_TABLE;
+const STATES_TABLE = process.env.STATES_TABLE;
+
+// In-memory store for state parameters
+const stateStore = new Map();
 
 // Apply middlewares with special handling for Expo AuthSession
 app.use((req, res, next) => {
@@ -46,8 +49,8 @@ app.use((req, res, next) => {
     console.log('Expo AuthSession request detected');
     // Use permissive CORS for Expo AuthSession
     res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, User-Agent, Origin');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, User-Agent, Origin');
     res.header('Access-Control-Allow-Credentials', 'true');
     
     if (req.method === 'OPTIONS') {
@@ -70,7 +73,7 @@ app.options('/api/auth/register-state', (req, res) => {
   if (origin?.startsWith('https://auth.expo.io')) {
     res.header('Access-Control-Allow-Origin', origin);
   } else {
-    res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Origin', '*');
   }
   
   res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -151,86 +154,300 @@ app.post('/api/auth/register-state', authCors(), async (req, res) => {
 // Square OAuth callback handler
 app.get('/api/auth/square/callback', async (req, res) => {
   try {
+    const { code, state, error } = req.query;
+    
     console.log('Square callback received:', {
-      query: req.query,
-      headers: {
-        origin: req.headers.origin,
-        userAgent: req.headers['user-agent']
-      }
+      hasCode: !!code,
+      state,
+      hasError: !!error,
+      STATES_TABLE: STATES_TABLE,
+      env_STATES_TABLE: process.env.STATES_TABLE,
+      headers: req.headers,
+      query: req.query
+    });
+    
+    if (error) {
+      console.error('Error from Square:', error);
+      return res.redirect(`joylabs://square-callback?error=${encodeURIComponent(error)}`);
+    }
+    
+    if (!code) {
+      console.error('No code provided in Square callback');
+      return res.redirect('joylabs://square-callback?error=missing_code');
+    }
+
+    if (!state) {
+      console.error('No state provided in Square callback');
+      return res.redirect('joylabs://square-callback?error=missing_state');
+    }
+
+    // Retrieve state data from DynamoDB
+    const getStateParams = {
+      TableName: STATES_TABLE,
+      Key: marshall({
+        state: state
+      })
+    };
+
+    console.log('Retrieving state data from DynamoDB:', {
+      tableName: STATES_TABLE,
+      state: state,
+      params: {
+        ...getStateParams,
+        Key: '(marshalled key)' // Don't log the actual key for security
+      },
+      region: process.env.AWS_REGION
     });
 
-    const { code, state } = req.query;
+    const stateData = await dynamoDb.send(new GetItemCommand(getStateParams));
+    
+    console.log('DynamoDB GetItem response:', {
+      hasItem: !!stateData.Item,
+      metadata: stateData.$metadata,
+      region: process.env.AWS_REGION,
+      itemKeys: stateData.Item ? Object.keys(stateData.Item) : null
+    });
 
-    if (!code) {
-      throw new Error('No authorization code received');
+    if (!stateData.Item) {
+      console.error('Invalid state parameter:', {
+        state,
+        tableName: STATES_TABLE,
+        region: process.env.AWS_REGION
+      });
+      return res.redirect('joylabs://square-callback?error=invalid_state');
     }
 
-    // Exchange the code for tokens
-    const tokenResponse = await exchangeCodeForToken(code);
+    const stateItem = unmarshall(stateData.Item);
+    const code_verifier = stateItem.code_verifier;
     
-    // Get merchant info using the access token
-    const merchantInfo = await getMerchantInfo(tokenResponse.access_token);
-
-    // Find or create user
-    let user = await findUserBySquareMerchantId(merchantInfo.merchant_id);
-    
-    if (!user) {
-      user = await createUser({
-        squareMerchantId: merchantInfo.merchant_id,
-        merchantInfo,
-        tokens: tokenResponse
-      });
-    } else {
-      await updateUser(user.id, {
-        merchantInfo,
-        tokens: tokenResponse
-      });
+    if (!code_verifier) {
+      console.error('No code verifier found for state');
+      return res.redirect('joylabs://square-callback?error=missing_code_verifier');
     }
 
-    // Generate JWT
-    const token = jwt.sign(
-      { 
-        userId: user.id,
-        merchantId: merchantInfo.merchant_id
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    try {
+      // Exchange code for tokens
+      const tokenResponse = await squareService.exchangeCodeForToken(code, code_verifier);
+      console.log('Successfully exchanged code for tokens');
 
-    // Determine if request is from Expo AuthSession
-    const isExpoAuthSession = req.headers.origin?.startsWith('https://auth.expo.io') || 
-                             req.headers['user-agent']?.includes('Expo');
+      // Get merchant info using the access token
+      const client = new Client({
+        accessToken: tokenResponse.access_token,
+        environment: 'production'
+      });
 
-    if (isExpoAuthSession) {
-      // For Expo AuthSession, return JSON response
-      res.json({
-        token,
-        user: {
-          id: user.id,
-          merchantId: merchantInfo.merchant_id,
-          businessName: merchantInfo.business_name
+      const { result } = await client.merchantsApi.retrieveMerchant(tokenResponse.merchant_id);
+      console.log('Retrieved merchant info');
+
+      // Clean up used state
+      const deleteStateParams = {
+        TableName: STATES_TABLE,
+        Key: marshall({
+          state: state
+        })
+      };
+      await dynamoDb.send(new DeleteItemCommand(deleteStateParams));
+
+      // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
+      const sanitizedBusinessName = encodeURIComponent(result.merchant.businessName || '');
+      const finalRedirectUrl = `joylabs://square-callback?access_token=${encodeURIComponent(tokenResponse.access_token)}&refresh_token=${encodeURIComponent(tokenResponse.refresh_token)}&merchant_id=${encodeURIComponent(tokenResponse.merchant_id)}&business_name=${sanitizedBusinessName}`;
+
+      // Debug logging for redirect URL
+      console.log('DEBUG - Redirect URL details:', {
+        baseRedirectUrl: 'joylabs://square-callback',
+        finalUrl: finalRedirectUrl,
+        manuallyConstructed: true,
+        params: {
+          access_token: `${tokenResponse.access_token.substring(0, 5)}...${tokenResponse.access_token.substring(tokenResponse.access_token.length - 5)}`,
+          refresh_token: `${tokenResponse.refresh_token.substring(0, 5)}...${tokenResponse.refresh_token.substring(tokenResponse.refresh_token.length - 5)}`,
+          merchant_id: tokenResponse.merchant_id,
+          business_name: result.merchant.businessName
         }
       });
-    } else {
-      // For web browser, redirect with token
-      const redirectUrl = new URL(process.env.FRONTEND_URL);
-      redirectUrl.searchParams.set('token', token);
-      res.redirect(redirectUrl.toString());
+
+      console.log('Redirecting to app with tokens');
+      return res.redirect(finalRedirectUrl);
+    } catch (error) {
+      console.error('Error exchanging code for token:', error);
+      return res.redirect(`joylabs://square-callback?error=token_exchange_failed&message=${encodeURIComponent(error.message)}`);
     }
   } catch (error) {
-    console.error('OAuth callback error:', error);
-    
-    // Send appropriate error response based on client
-    const isExpoAuthSession = req.headers.origin?.startsWith('https://auth.expo.io') || 
-                             req.headers['user-agent']?.includes('Expo');
-    
-    if (isExpoAuthSession) {
-      res.status(400).json({ error: error.message });
-    } else {
-      res.redirect(`${process.env.FRONTEND_URL}/error?message=${encodeURIComponent(error.message)}`);
-    }
+    console.error('Error in Square callback:', error);
+    return res.redirect('joylabs://square-callback?error=server_error');
   }
 });
 
 // Export the serverless handler
-module.exports.squareCallback = serverless(app); 
+module.exports.handler = serverless(app);
+
+/**
+ * Handle Square OAuth callback
+ */
+exports.handleSquareCallback = async (event) => {
+  console.log('Received Square callback with query parameters:', event.queryStringParameters);
+  
+  const { code, state, error, app_callback } = event.queryStringParameters || {};
+  
+  // Handle errors from Square
+  if (error) {
+    console.error('Square OAuth error:', error);
+    return {
+      statusCode: 302,
+      headers: {
+        Location: `joylabs://square-callback?error=${encodeURIComponent(error)}&message=${encodeURIComponent('Authorization failed')}`
+      }
+    };
+  }
+
+  // Validate required parameters
+  if (!code) {
+    console.error('No code received from Square');
+    return {
+      statusCode: 302,
+      headers: {
+        Location: `joylabs://square-callback?error=missing_code&message=${encodeURIComponent('No authorization code received')}`
+      }
+    };
+  }
+
+  // Validate state parameter
+  if (!state || !stateStore.has(state)) {
+    console.error('Invalid state parameter');
+    return {
+      statusCode: 302,
+      headers: {
+        Location: `joylabs://square-callback?error=invalid_state&message=${encodeURIComponent('Invalid state parameter')}`
+      }
+    };
+  }
+
+  try {
+    // Exchange code for tokens
+    console.log('Exchanging code for tokens...');
+    const tokenResponse = await squareService.exchangeCodeForToken(code);
+    
+    // Get merchant info
+    console.log('Getting merchant info...');
+    const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+    
+    // Clear state from store
+    stateStore.delete(state);
+
+    // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
+    const sanitizedBusinessName = encodeURIComponent(merchantInfo.businessName || '');
+    const finalRedirectUrl = `joylabs://square-callback?access_token=${encodeURIComponent(tokenResponse.access_token)}&refresh_token=${encodeURIComponent(tokenResponse.refresh_token)}&merchant_id=${encodeURIComponent(tokenResponse.merchant_id)}&business_name=${sanitizedBusinessName}`;
+
+    console.log('Redirecting to app with tokens');
+    
+    return {
+      statusCode: 302,
+      headers: {
+        Location: finalRedirectUrl
+      }
+    };
+  } catch (error) {
+    console.error('Error in Square callback:', error);
+    
+    return {
+      statusCode: 302,
+      headers: {
+        Location: `joylabs://square-callback?error=token_exchange_failed&message=${encodeURIComponent(error.message || 'Failed to exchange code for token')}`
+      }
+    };
+  }
+};
+
+/**
+ * Initialize Square OAuth flow
+ */
+exports.initializeSquareOAuth = async (event) => {
+  try {
+    console.log('Initializing Square OAuth:', {
+      STATES_TABLE: STATES_TABLE,
+      env_STATES_TABLE: process.env.STATES_TABLE,
+      event: {
+        headers: event.headers,
+        requestContext: event.requestContext
+      }
+    });
+
+    // Generate state parameter and PKCE values
+    const state = squareService.generateStateParam();
+    const codeVerifier = squareService.generateCodeVerifier();
+    const codeChallenge = squareService.generateCodeChallenge(codeVerifier);
+    
+    console.log('Generated OAuth parameters:', {
+      state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
+      hasCodeVerifier: !!codeVerifier,
+      hasCodeChallenge: !!codeChallenge
+    });
+
+    // Store state and code verifier in DynamoDB with TTL
+    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // 10 minutes
+    const params = {
+      TableName: STATES_TABLE,
+      Item: marshall({
+        state: state,
+        code_verifier: codeVerifier,
+        timestamp: Date.now(),
+        used: false,
+        ttl: ttl
+      })
+    };
+
+    console.log('Storing state in DynamoDB:', {
+      tableName: STATES_TABLE,
+      state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
+      ttl: new Date(ttl * 1000).toISOString(),
+      params: {
+        ...params,
+        Item: '(marshalled item)' // Don't log the actual item for security
+      }
+    });
+
+    const putResult = await dynamoDb.send(new PutItemCommand(params));
+    console.log('DynamoDB PutItem result:', {
+      metadata: putResult.$metadata,
+      success: putResult.$metadata.httpStatusCode === 200
+    });
+
+    // Generate OAuth URL
+    const url = await squareService.generateOAuthUrl(state, codeChallenge);
+    
+    console.log('Generated OAuth URL:', {
+      urlLength: url.length,
+      containsState: url.includes(state),
+      containsCodeChallenge: url.includes(codeChallenge)
+    });
+
+    return {
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      },
+      body: JSON.stringify({ url })
+    };
+  } catch (error) {
+    console.error('Error initializing Square OAuth:', {
+      error: error.message,
+      code: error.code,
+      name: error.name,
+      stack: error.stack
+    });
+    
+    return {
+      statusCode: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      },
+      body: JSON.stringify({
+        error: 'Failed to initialize OAuth flow',
+        message: error.message
+      })
+    };
+  }
+}; 

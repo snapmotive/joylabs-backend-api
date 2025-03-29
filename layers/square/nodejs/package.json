@@ -1,15 +1,8 @@
 {
-  "name": "joylabs-square-layer",
+  "name": "joylabs-square-dependencies",
   "version": "1.0.0",
-  "description": "Square API dependencies for JoyLabs backend",
+  "private": true,
   "dependencies": {
-    "square": "^33.1.0"
-  },
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+    "square": "^33.0.0"
+  }
 }

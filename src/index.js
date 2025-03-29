@@ -5,8 +5,11 @@ const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const DynamoDBStore = require('connect-dynamodb')(session);
 const morgan = require('morgan');
-const { DynamoDBClient, PutItemCommand } = require('@aws-sdk/client-dynamodb');
-const { marshall } = require('@aws-sdk/util-dynamodb');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
+
+// Constants
+const STATES_TABLE = process.env.STATES_TABLE;
 
 // Custom CORS middleware
 const configureCors = require('./middleware/cors');
@@ -148,23 +151,27 @@ app.post('/api/auth/register-state', async (req, res) => {
     const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // Current time + 10 minutes in seconds
     const params = {
       TableName: STATES_TABLE,
-      Item: marshall({
+      Item: {
         state: state,
         timestamp: Date.now(),
         used: false,
         ttl: ttl,
         redirectUrl: req.body.redirectUrl || '/auth/success'
-      })
+      }
     };
 
-    console.log('Sending PutItem command to DynamoDB with params:', {
-      ...params,
-      Item: '(marshalled item)' // Don't log the actual item for security
+    console.log('Sending PutCommand to DynamoDB with params:', {
+      TableName: params.TableName,
+      Item: {
+        ...params.Item,
+        state: params.Item.state.substring(0, 5) + '...' + params.Item.state.substring(params.Item.state.length - 5)
+      }
     });
 
-    const result = await dynamoDb.send(new PutItemCommand(params));
+    const dynamoDb = getDynamoDb();
+    const result = await dynamoDb.send(new PutCommand(params));
     
-    console.log('DynamoDB PutItem result:', {
+    console.log('DynamoDB PutCommand result:', {
       statusCode: result.$metadata.httpStatusCode,
       requestId: result.$metadata.requestId
     });
@@ -180,7 +187,9 @@ app.post('/api/auth/register-state', async (req, res) => {
       error: error.message,
       code: error.code,
       name: error.name,
-      stack: error.stack
+      stack: error.stack,
+      region: process.env.AWS_REGION,
+      tableName: STATES_TABLE
     });
     return res.status(500).json({
       error: 'Failed to register state parameter',

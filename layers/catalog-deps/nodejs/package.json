@@ -1,0 +1,9 @@
+{
+  "name": "joylabs-catalog-dependencies",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.775.0",
+    "uuid": "^9.0.1"
+  }
+} 

@@ -1,0 +1,10 @@
+{
+  "name": "joylabs-oauth-dependencies",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.775.0",
+    "axios": "^1.6.5",
+    "querystring": "^0.2.1"
+  }
+} 

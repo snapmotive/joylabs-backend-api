@@ -1,0 +1,53 @@
+service: joylabs-backend-api-v3-layers
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-west-1
+  stage: ${opt:stage, 'production'}
+  
+layers:
+  core:
+    path: layers/core
+    name: ${self:service}-core-${opt:stage, 'production'}
+    description: Core dependencies for all functions
+    compatibleRuntimes:
+      - nodejs18.x
+    retain: true
+  api-deps:
+    path: layers/api-deps
+    name: ${self:service}-api-deps-${opt:stage, 'production'}
+    description: API specific dependencies
+    compatibleRuntimes:
+      - nodejs18.x
+    retain: true
+  catalog-deps:
+    path: layers/catalog-deps
+    name: ${self:service}-catalog-deps-${opt:stage, 'production'}
+    description: Catalog specific dependencies
+    compatibleRuntimes:
+      - nodejs18.x
+    retain: true
+  webhooks-deps:
+    path: layers/webhooks-deps
+    name: ${self:service}-webhooks-deps-${opt:stage, 'production'}
+    description: Webhooks specific dependencies
+    compatibleRuntimes:
+      - nodejs18.x
+    retain: true
+  oauth-deps:
+    path: layers/oauth-deps
+    name: ${self:service}-oauth-deps-${opt:stage, 'production'}
+    description: OAuth specific dependencies
+    compatibleRuntimes:
+      - nodejs18.x
+    retain: true
+  square:
+    path: layers/square
+    name: ${self:service}-square-${opt:stage, 'production'}
+    description: Square SDK
+    compatibleRuntimes:
+      - nodejs18.x
+    retain: true 
