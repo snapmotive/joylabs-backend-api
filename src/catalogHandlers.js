@@ -105,7 +105,14 @@ app.use((err, req, res, next) => {
 
 // Enhanced logging for debugging
 const logRequest = (event, context) => {
-  const { path, headers, query, method } = event;
+  console.log('Raw event:', JSON.stringify(event));
+  
+  // Extract method, path, headers and query parameters
+  const method = event.httpMethod || event.requestContext?.http?.method;
+  const path = event.path || event.requestContext?.http?.path;
+  const headers = event.headers || {};
+  const query = event.queryStringParameters || {};
+  
   console.log('Incoming catalog request:', {
     method,
     path,
@@ -130,7 +137,7 @@ const handleError = (error, path) => {
   if (error.errors) {
     return {
       statusCode,
-      body: JSON.stringify({
+      body: safeJSONStringify({
         success: false,
         error: message,
         errors: error.errors,
@@ -141,7 +148,7 @@ const handleError = (error, path) => {
 
   return {
     statusCode,
-    body: JSON.stringify({
+    body: safeJSONStringify({
       success: false,
       error: message,
       code: error.code || 'server_error'
@@ -152,7 +159,23 @@ const handleError = (error, path) => {
 // Middleware to extract and validate auth token
 const authenticateRequest = async (event) => {
   try {
-    const authHeader = event.headers?.authorization;
+    // Get the authorization header, accounting for different event structures
+    let authHeader;
+    
+    // Check if the event has headers directly (Lambda direct invocation)
+    if (event.headers && event.headers.authorization) {
+      authHeader = event.headers.authorization;
+    } 
+    // Check if the headers have Authorization with capital A (API Gateway)
+    else if (event.headers && event.headers.Authorization) {
+      authHeader = event.headers.Authorization;
+    }
+    // Check multiValueHeaders from API Gateway v1
+    else if (event.multiValueHeaders && (event.multiValueHeaders.authorization || event.multiValueHeaders.Authorization)) {
+      authHeader = (event.multiValueHeaders.authorization || event.multiValueHeaders.Authorization)[0];
+    }
+    
+    console.log('Auth header found:', !!authHeader);
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       console.log('Missing or invalid authorization header');
@@ -222,173 +245,111 @@ const authenticateRequest = async (event) => {
   }
 };
 
-// List catalog items with optional filtering
-const listCatalogItems = async (event) => {
+/**
+ * Helper function to safely serialize objects with BigInt values
+ * @param {Object} data - The data to serialize
+ * @returns {string} - JSON string
+ */
+const safeJSONStringify = (data) => {
+  return JSON.stringify(data, (_, value) => 
+    typeof value === 'bigint' 
+      ? value.toString() 
+      : value
+  );
+};
+
+// Main handler function
+const handler = async (event, context) => {
   try {
-    logRequest(event);
+    logRequest(event, context);
+    
+    // Check if this is an OPTIONS request for CORS
+    if (event.httpMethod === 'OPTIONS' || event.requestContext?.http?.method === 'OPTIONS') {
+      return {
+        statusCode: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+          'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+        },
+        body: safeJSONStringify({ message: 'CORS preflight successful' })
+      };
+    }
+    
+    // Parse URL path to determine the route
+    const path = event.path || event.requestContext?.http?.path || '';
+    const method = event.httpMethod || event.requestContext?.http?.method || 'GET';
+    const queryParams = event.queryStringParameters || {};
     
     // Authenticate the request
     const authResult = await authenticateRequest(event);
     if (!authResult.isAuthenticated) {
       return {
         statusCode: authResult.error.statusCode,
-        body: JSON.stringify({ error: authResult.error.message })
-      };
-    }
-    
-    const { user } = authResult;
-    const { types = 'ITEM', limit = 100, cursor } = event.query || {};
-    
-    console.log('Listing catalog items with params:', { types, limit, cursor });
-    
-    const response = await executeSquareRequest(async (client) => {
-      return await client.catalogApi.listCatalog(cursor, types);
-    }, user.squareAccessToken);
-    
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        success: true,
-        objects: response.result.objects || [],
-        cursor: response.result.cursor
-      })
-    };
-  } catch (error) {
-    return handleError(error, '/v2/catalog/list');
-  }
-};
-
-// Get catalog item by ID
-const getCatalogItem = async (event) => {
-  try {
-    logRequest(event);
-    
-    // Authenticate the request
-    const authResult = await authenticateRequest(event);
-    if (!authResult.isAuthenticated) {
-      return {
-        statusCode: authResult.error.statusCode,
-        body: JSON.stringify({ error: authResult.error.message })
-      };
-    }
-    
-    const { user } = authResult;
-    const { id } = event.pathParameters || {};
-    
-    if (!id) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Item ID is required' })
-      };
-    }
-    
-    console.log('Getting catalog item:', { id });
-    
-    const response = await executeSquareRequest(async (client) => {
-      return await client.catalogApi.retrieveCatalogObject(id, true);
-    }, user.squareAccessToken);
-    
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        success: true,
-        object: response.result.object,
-        relatedObjects: response.result.relatedObjects || []
-      })
-    };
-  } catch (error) {
-    return handleError(error, '/v2/catalog/item/{id}');
-  }
-};
-
-// Search catalog items
-const searchCatalogItems = async (event) => {
-  try {
-    logRequest(event);
-    
-    // Authenticate the request
-    const authResult = await authenticateRequest(event);
-    if (!authResult.isAuthenticated) {
-      return {
-        statusCode: authResult.error.statusCode,
-        body: JSON.stringify({ error: authResult.error.message })
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        },
+        body: safeJSONStringify({ error: authResult.error.message })
       };
     }
     
     const { user } = authResult;
     
-    // Parse request body
-    let body;
-    try {
-      body = JSON.parse(event.body || '{}');
-    } catch (e) {
+    // Check the path to determine which handler to call
+    if (path.includes('/v2/catalog/list')) {
+      // List catalog items
+      const { types = 'ITEM,CATEGORY', limit = 100, cursor } = queryParams;
+      
+      console.log('Listing catalog items with params:', { types, limit, cursor });
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.listCatalog(cursor, types);
+      }, user.squareAccessToken);
+      
       return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Invalid request body' })
+        statusCode: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        },
+        body: safeJSONStringify(response)
       };
     }
     
-    console.log('Searching catalog with criteria:', JSON.stringify(body));
+    // Add other route handlers here
+    // ...
     
-    const response = await executeSquareRequest(async (client) => {
-      return await client.catalogApi.searchCatalogObjects(body);
-    }, user.squareAccessToken);
-    
+    // Return 404 if no matching route
     return {
-      statusCode: 200,
-      body: JSON.stringify({
-        success: true,
-        objects: response.result.objects || [],
-        cursor: response.result.cursor,
-        matchedVariationIds: response.result.matchedVariationIds || []
-      })
+      statusCode: 404,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json'
+      },
+      body: safeJSONStringify({ error: 'Route not found' })
     };
   } catch (error) {
-    return handleError(error, '/v2/catalog/search');
+    console.error('Unhandled error in catalog handler:', error);
+    
+    return {
+      statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json'
+      },
+      body: safeJSONStringify({
+        error: 'Internal server error',
+        message: error.message
+      })
+    };
   }
 };
 
-// Consolidate handler exports to avoid conflicts
-try {
-  // Route handler for catalog requests
-  const handler = async (event, context) => {
-    try {
-      logRequest(event, context);
-      
-      // Get HTTP method and path
-      const { path, httpMethod } = event;
-      
-      // Convert API Gateway event to Express request format
-      let response;
-      
-      // Handle specific catalog endpoints directly for better performance
-      if (path.endsWith('/v2/catalog/list') && httpMethod === 'GET') {
-        response = await listCatalogItems(event);
-      } else if (path.match(/\/v2\/catalog\/item\/[\w-]+$/) && httpMethod === 'GET') {
-        response = await getCatalogItem(event);
-      } else if (path === '/v2/catalog/search' && httpMethod === 'POST') {
-        response = await searchCatalogItems(event);
-      } else {
-        // Fall back to Express for other routes
-        return serverless(app)(event, context);
-      }
-      
-      return response;
-    } catch (error) {
-      return handleError(error, event.path);
-    }
-  };
-  
-  // Delete conflicting exports to clean up
-  if (exports.handler) {
-    delete exports.handler;
-  }
-  
-  // Single, consistent export
-  module.exports.handler = handler;
-} catch (error) {
-  console.error('Error setting up catalog handler:', error);
-  
-  // Fallback to Express handler if there's an error
-  module.exports.handler = serverless(app);
-} 
+// Delete conflicting exports to clean up
+if (exports.handler) {
+  delete exports.handler;
+}
+
+// Single, consistent export
+module.exports.handler = handler; 
