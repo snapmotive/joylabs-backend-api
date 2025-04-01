@@ -60,7 +60,18 @@ function handleSquareError(error, defaultMessage = 'An error occurred') {
     }
   };
   
-  // Check if it's a Square API error
+  // Check if it's a SquareError from the SDK
+  if (error.name === 'SquareError') {
+    errorResponse.error.message = error.message;
+    errorResponse.error.code = error.code || 'SQUARE_SDK_ERROR';
+    errorResponse.error.details = error.errors || [];
+    if (error.statusCode) {
+      errorResponse.statusCode = error.statusCode;
+    }
+    return errorResponse;
+  }
+  
+  // Check if it's a Square API error with errors array
   if (error.errors && Array.isArray(error.errors)) {
     errorResponse.error.details = error.errors.map(e => ({
       code: e.code || 'UNKNOWN_ERROR',
@@ -93,21 +104,43 @@ function handleSquareError(error, defaultMessage = 'An error occurred') {
     if (squareErrors[0]?.code) {
       errorResponse.error.code = squareErrors[0].code;
     }
+  } else if (error.details && Array.isArray(error.details)) {
+    // Handle enhanced errors from our retry mechanism
+    errorResponse.error.details = error.details;
+    errorResponse.error.message = error.message;
+    errorResponse.error.code = error.code || 'UNKNOWN_ERROR';
   } else if (error.message) {
     // Handle standard Error objects
     errorResponse.error.message = error.message;
     
-    // Check for authentication errors
-    if (error.message.includes('Authentication') || error.message.includes('Unauthorized')) {
-      errorResponse.error.code = 'AUTHENTICATION_ERROR';
-    } else if (error.message.includes('Rate limit')) {
-      errorResponse.error.code = 'RATE_LIMIT_ERROR';
+    // Use the error code if available
+    if (error.code) {
+      errorResponse.error.code = error.code;
+    } else {
+      // Otherwise infer from message
+      if (error.message.includes('Authentication') || error.message.includes('Unauthorized')) {
+        errorResponse.error.code = 'AUTHENTICATION_ERROR';
+      } else if (error.message.includes('Rate limit')) {
+        errorResponse.error.code = 'RATE_LIMIT_ERROR';
+      } else if (error.message.includes('Timeout')) {
+        errorResponse.error.code = 'TIMEOUT_ERROR';
+      } else if (error.message.includes('Network')) {
+        errorResponse.error.code = 'NETWORK_ERROR';
+      }
+    }
+  }
+
+  // Include retry information if available
+  if (error.retries !== undefined) {
+    errorResponse.error.retries = error.retries;
+    if (error.retries > 0) {
+      errorResponse.error.message += ` (after ${error.retries} retries)`;
     }
   }
 
   // Map HTTP status code to error code
-  if (error.status || error.response?.status) {
-    const statusCode = error.status || error.response?.status;
+  if (error.statusCode || error.response?.status) {
+    const statusCode = error.statusCode || error.response?.status;
     
     // Add status code to response
     errorResponse.statusCode = statusCode;
@@ -132,6 +165,12 @@ function handleSquareError(error, defaultMessage = 'An error occurred') {
         // Add retry-after if available
         if (error.response?.headers?.['retry-after']) {
           errorResponse.error.retryAfter = parseInt(error.response.headers['retry-after'], 10);
+        }
+        break;
+      case 400:
+        if (error.code === 'INVALID_REQUEST_ERROR' || error.message.includes('validation')) {
+          errorResponse.error.code = 'VALIDATION_ERROR';
+          errorResponse.error.message = 'Invalid request: ' + error.message;
         }
         break;
       case 500:

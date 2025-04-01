@@ -7,6 +7,7 @@ const { handleSquareError } = require('../utils/errorHandling');
 const CatalogItem = require('../models/CatalogItem');
 const uuid = require('uuid');
 const squareService = require('./square');
+const squareErrorHandler = require('../utils/errorHandling');
 
 // Default catalog image size dimensions
 const DEFAULT_IMAGE_SIZE = { width: 300, height: 300 };
@@ -14,83 +15,63 @@ const DEFAULT_IMAGE_SIZE = { width: 300, height: 300 };
 /**
  * List catalog items
  * @param {string} accessToken - Square access token
- * @param {Object} options - List options
- * @returns {Promise<Object>} List of catalog items
+ * @param {Object} options - Catalog listing options
+ * @returns {Promise<Object>} Catalog items response
  */
 async function listCatalogItems(accessToken, options = {}) {
   try {
     console.log('=== REQUEST BOUNDARY: listCatalogItems START ===');
     console.log('Listing catalog items from Square with options:', JSON.stringify(options, null, 2));
     
-    const client = getSquareClient(accessToken);
-    const catalogApi = client.catalog;
+    // Use executeSquareRequest to handle retries and errors
+    const result = await squareService.executeSquareRequest(
+      async (client) => {
+        // Parse options
+        const types = options.types || ['ITEM', 'CATEGORY'];
+        const typesArray = Array.isArray(types) ? types : types.split(',');
+        const limit = options.limit ? parseInt(options.limit) : 100;
+        const cursor = options.cursor || null;
+        const includeRelatedObjects = options.includeRelatedObjects === true || 
+                                    options.includeRelatedObjects === 'true';
+        const includeDeletedObjects = options.includeDeletedObjects === true ||
+                                    options.includeDeletedObjects === 'true';
+                                    
+        console.log('Making ListCatalog call with params:', {
+          types: typesArray,
+          limit,
+          cursor,
+          includeRelatedObjects,
+          includeDeletedObjects
+        });
+        
+        // Call Square SDK method with appropriate parameters
+        return client.catalog.listCatalog(
+          typesArray,
+          cursor,
+          limit,
+          includeDeletedObjects,
+          includeRelatedObjects
+        );
+      },
+      accessToken,
+      'catalog-api' // Use catalog-specific rate limiting
+    );
     
-    const { types = ['ITEM', 'CATEGORY'], page = 1, limit = 20 } = options;
-    
-    // Convert types to array if it's a string
-    const typesArray = Array.isArray(types) ? types : types.split(',');
-    console.log('Using types:', typesArray);
-    
-    // Calculate cursor based on page and limit
-    let cursor = undefined;
-    if (page > 1) {
-      cursor = `page_${page - 1}`;
-    }
-    
-    console.log('Making ListCatalog request with params:', JSON.stringify({
-      types: typesArray,
-      limit,
-      cursor
-    }, null, 2));
-    
-    // CORRECT SDK USAGE: Pass individual parameters instead of an object
-    const response = await catalogApi.listCatalog(typesArray, cursor, limit);
-    
-    if (response?.result) {
-      console.log('ListCatalog response successful. Objects count:', 
-        response.result.objects ? response.result.objects.length : 0);
-      
-      if (response.result.objects && response.result.objects.length > 0) {
-        console.log('First few objects:', response.result.objects.slice(0, 3).map(obj => ({
-          id: obj.id,
-          type: obj.type,
-          name: obj.categoryData?.name || obj.itemData?.name || 'Unknown'
-        })));
-      } else {
-        console.log('Warning: No catalog objects returned. This might indicate:');
-        console.log('1. There are no objects of the requested types in the Square account');
-        console.log('2. The token might not have access to the requested catalog objects');
-        console.log('3. The merchant account might be empty or incorrectly configured');
-      }
-    } else {
-      console.log('Warning: Unexpected response format from Square:', response);
-    }
-    
-    console.log('=== REQUEST BOUNDARY: listCatalogItems END (Success) ===');
+    console.log('=== REQUEST BOUNDARY: listCatalogItems END ===');
+    console.log('Successfully retrieved catalog items:', { 
+      count: result.result.objects?.length || 0,
+      cursor: result.result.cursor ? 'Present' : 'None'
+    });
     
     return {
       success: true,
-      objects: response.result.objects || [],
-      cursor: response.result.cursor,
-      count: response.result.objects ? response.result.objects.length : 0
+      objects: result.result.objects || [],
+      cursor: result.result.cursor,
+      types: options.types || ['ITEM', 'CATEGORY']
     };
   } catch (error) {
-    console.error('=== REQUEST BOUNDARY: listCatalogItems END (Error) ===');
-    console.error('Error listing catalog items:', error.response ? error.response.data : error);
-    console.error('Square API Error:', error);
-    
-    if (error.response && error.response.data) {
-      return {
-        success: false,
-        error: {
-          message: error.response.data.errors?.[0]?.detail || 'Failed to list catalog items',
-          code: error.response.data.errors?.[0]?.code || 'UNKNOWN_ERROR',
-          details: error.response.data.errors || []
-        }
-      };
-    }
-    
-    return handleSquareError(error, 'Failed to list catalog items');
+    console.error('Error listing catalog items:', error);
+    return squareErrorHandler.handleSquareError(error, 'Failed to list catalog items');
   }
 }
 

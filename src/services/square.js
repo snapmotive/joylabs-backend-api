@@ -7,6 +7,7 @@ const crypto = require('crypto');
 // Import Square client for v42+
 const { SquareClient } = require('square');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+const squareApiHelpers = require('../utils/squareApiHelpers');
 
 // Initialize AWS clients
 const secretsManager = new SecretsManagerClient({ region: 'us-west-1' });
@@ -220,19 +221,69 @@ async function exchangeCodeForToken(code, code_verifier) {
     }
     
     console.log('Sending token request to Square API');
-    const response = await axios.post('https://connect.squareup.com/oauth2/token', requestBody);
-
+    
+    // Define a retry configuration for token exchange
+    // Token exchange is critical, so use more aggressive retry
+    const tokenRetryConfig = {
+      numberOfRetries: 3,
+      backoffFactor: 3,    // More aggressive backoff
+      statusCodesToRetry: [429, 500, 502, 503, 504],
+      endpoint: 'oauth-api',  // Use OAuth endpoint for rate limiting
+      useRateLimiter: true,
+      cost: 2  // Token exchange is a more expensive operation
+    };
+    
+    // Create a function for the token exchange that we'll retry if needed
+    const exchangeToken = async () => {
+      try {
+        const response = await axios.post('https://connect.squareup.com/oauth2/token', requestBody);
+        return response.data;
+      } catch (error) {
+        // Enhance error with specific OAuth error details
+        const enhancedError = new Error(
+          error.response?.data?.message || 
+          error.response?.data?.error_description || 
+          error.message
+        );
+        
+        // Add OAuth specific error info
+        enhancedError.statusCode = error.response?.status || 500;
+        enhancedError.code = error.response?.data?.error || 'TOKEN_EXCHANGE_ERROR';
+        
+        // Add full error response for debugging
+        enhancedError.details = [{ 
+          error: error.response?.data?.error,
+          error_description: error.response?.data?.error_description
+        }];
+        
+        throw enhancedError;
+      }
+    };
+    
+    // Execute with retry
+    const tokenData = await squareApiHelpers.executeWithRetry(
+      exchangeToken,
+      null, // No client needed as we're using axios directly
+      tokenRetryConfig
+    );
+    
     console.log('Successfully received token response');
     
     return {
-      access_token: response.data.access_token,
-      refresh_token: response.data.refresh_token,
-      expires_at: response.data.expires_at,
-      merchant_id: response.data.merchant_id
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_at: tokenData.expires_at,
+      merchant_id: tokenData.merchant_id
     };
   } catch (error) {
     console.error('Error exchanging code for token:', error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || error.message);
+    
+    // Create an informative error with better details for debugging
+    const tokenError = new Error(error.response?.data?.message || error.response?.data?.error_description || error.message);
+    tokenError.code = error.response?.data?.error || 'TOKEN_EXCHANGE_ERROR';
+    tokenError.statusCode = error.response?.status || 500;
+    
+    throw tokenError;
   }
 }
 
@@ -249,10 +300,25 @@ async function getMerchantInfo(accessToken) {
     // There are multiple ways to approach this based on the SDK version
     let response;
     
+    // Use our executeWithRetry function with custom retry config for auth-related operations
+    // Authentication should have a higher retry count as it's critical for app function
+    const authRetryConfig = {
+      numberOfRetries: 4,        // Try more times for auth requests
+      statusCodesToRetry: [429, 500, 502, 503, 504], // Add gateway errors
+      endpoint: 'oauth-api',     // Use the OAuth endpoint bucket for rate limiting
+      useRateLimiter: true
+    };
+    
     try {
       // Try first approach for v42 (Square API is sometimes inconsistent with naming)
       console.log('Attempting to retrieve merchant info with getMerchant');
-      response = await client.merchants.getMerchant('me');
+      
+      // Use square API helpers for better retry logic
+      response = await squareApiHelpers.executeWithRetry(
+        async (client) => client.merchants.getMerchant('me'),
+        client,
+        authRetryConfig
+      );
     } catch (error) {
       // If first approach fails, try an alternative
       if (error.message.includes('is not a function')) {
@@ -260,22 +326,32 @@ async function getMerchantInfo(accessToken) {
         
         // Try using direct HTTP request to the Square API
         const axios = require('axios');
-        const merchantResponse = await axios({
-          method: 'get',
-          url: 'https://connect.squareup.com/v2/merchants/me',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'Square-Version': '2023-12-13'
-          }
-        });
         
-        // Format response to match SDK structure
-        response = {
-          result: {
-            merchant: merchantResponse.data.merchant
-          }
+        // Define a function to make the direct API call
+        const directApiCall = async () => {
+          const merchantResponse = await axios({
+            method: 'get',
+            url: 'https://connect.squareup.com/v2/merchants/me',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Square-Version': '2023-12-13'
+            }
+          });
+          
+          return {
+            result: {
+              merchant: merchantResponse.data.merchant
+            }
+          };
         };
+        
+        // Use our retry logic with the axios call
+        response = await squareApiHelpers.executeWithRetry(
+          directApiCall,
+          null, // No client needed for direct axios call
+          authRetryConfig
+        );
         
         console.log('Successfully retrieved merchant info via direct API call');
       } else {
@@ -296,6 +372,12 @@ async function getMerchantInfo(accessToken) {
       status: response.result.merchant.status
     };
   } catch (error) {
+    // Enhance error with better details for authentication failures
+    if (error.statusCode === 401 || error.message.includes('Unauthorized')) {
+      error.code = 'AUTHENTICATION_ERROR';
+      error.message = 'Invalid or expired access token. Please reauthenticate with Square.';
+    }
+    
     console.error('Error getting merchant info:', error);
     throw error;
   }
@@ -339,18 +421,49 @@ async function verifyWebhookSignature(signature, requestBody) {
     // Generate calculated signature
     const calculatedSignature = hmac.digest('base64');
     
+    // Log signature details (without revealing the actual signatures)
     console.log('Signature verification:', {
       providedSignatureLength: signature.length,
       calculatedSignatureLength: calculatedSignature.length,
-      match: signature === calculatedSignature
+      match: signature === calculatedSignature,
+      providedSignatureStart: signature.substring(0, 5) + '...',
+      calculatedSignatureStart: calculatedSignature.substring(0, 5) + '...'
     });
     
-    // Compare signatures - making sure to use a constant-time comparison to prevent timing attacks
-    return signature === calculatedSignature;
+    // Compare signatures using a constant-time comparison to prevent timing attacks
+    return timingSafeEqual(signature, calculatedSignature);
   } catch (error) {
-    console.error('Error verifying webhook signature:', error);
+    // Log the error with more details
+    squareApiHelpers.logApiError({
+      message: 'Error verifying webhook signature: ' + error.message,
+      code: 'WEBHOOK_VERIFICATION_ERROR',
+      statusCode: 400,
+      details: [{ detail: error.stack }]
+    }, 0);
+    
     return false;
   }
+}
+
+/**
+ * Perform a timing-safe comparison of two strings
+ * This prevents timing attacks when comparing signatures
+ * 
+ * @param {string} a - First string
+ * @param {string} b - Second string
+ * @returns {boolean} - True if the strings are equal
+ */
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  
+  return result === 0;
 }
 
 /**
@@ -358,25 +471,133 @@ async function verifyWebhookSignature(signature, requestBody) {
  * 
  * @param {Function} requestFn - Function that takes a Square client and returns a promise
  * @param {string} accessToken - Square access token
+ * @param {string} endpoint - Optional endpoint identifier for rate limiting (e.g., 'catalog-api')
  * @returns {Promise<Object>} - Square API response
  */
-async function executeSquareRequest(requestFn, accessToken) {
+async function executeSquareRequest(requestFn, accessToken, endpoint = 'square-api') {
   try {
+    // Get a Square client instance
     const client = getSquareClient(accessToken);
-    console.log('Executing Square request with v42 SDK');
+    console.log('Executing Square request with v42 SDK and retry logic');
     
-    return await requestFn(client);
-  } catch (error) {
-    console.error('Square API error:', {
-      message: error.message,
-      code: error.code || error.statusCode || 'UNKNOWN_ERROR',
-      statusCode: error.statusCode || 500,
-      details: error.details || error.errors || []
+    // Use our enhanced retry logic from squareApiHelpers
+    return await squareApiHelpers.executeWithRetry(requestFn, client, {
+      endpoint: endpoint,
+      useRateLimiter: true
     });
-    
-    // Rethrow with additional context
-    error.statusCode = error.statusCode || 500;
+  } catch (error) {
+    // This error has already been logged and enhanced by executeWithRetry
+    // Just rethrow it to be handled by the caller
     throw error;
+  }
+}
+
+/**
+ * Refresh an expired access token using a refresh token
+ * @param {string} refreshToken - The refresh token from a previous token exchange
+ * @returns {Promise<Object>} The refreshed token response
+ */
+async function refreshAccessToken(refreshToken) {
+  try {
+    const credentials = await getSquareCredentials();
+    
+    console.log('Refreshing Square access token');
+    
+    // Define a retry configuration for token refresh
+    // Token refresh is critical and we want to be especially careful
+    const tokenRefreshConfig = {
+      numberOfRetries: 4,       // More retries for token refresh
+      backoffFactor: 3,         // More aggressive backoff
+      statusCodesToRetry: [429, 500, 502, 503, 504],
+      endpoint: 'oauth-api',    // Use OAuth endpoint for rate limiting
+      useRateLimiter: true,
+      cost: 2                   // Token refresh is a more expensive operation
+    };
+    
+    // Create a function for the token refresh that we'll retry if needed
+    const refreshTokenFn = async () => {
+      try {
+        const requestBody = {
+          client_id: credentials.applicationId,
+          client_secret: credentials.applicationSecret,
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken
+        };
+        
+        const response = await axios.post(
+          'https://connect.squareup.com/oauth2/token', 
+          requestBody
+        );
+        
+        return response.data;
+      } catch (error) {
+        // Enhance error with specific OAuth error details
+        const enhancedError = new Error(
+          error.response?.data?.message || 
+          error.response?.data?.error_description || 
+          error.message
+        );
+        
+        // Add OAuth specific error info
+        enhancedError.statusCode = error.response?.status || 500;
+        enhancedError.code = error.response?.data?.error || 'TOKEN_REFRESH_ERROR';
+        
+        // Add full error response for debugging
+        enhancedError.details = [{ 
+          error: error.response?.data?.error,
+          error_description: error.response?.data?.error_description
+        }];
+        
+        // Special handling for refresh token errors
+        if (error.response?.status === 400 && 
+            (error.response?.data?.error === 'invalid_grant' || 
+             error.response?.data?.error_description?.includes('refresh token'))) {
+          enhancedError.code = 'INVALID_REFRESH_TOKEN';
+          enhancedError.message = 'Refresh token is invalid or expired. Please reconnect your Square account.';
+          enhancedError.requiresReauthentication = true;
+        }
+        
+        throw enhancedError;
+      }
+    };
+    
+    // Execute with retry
+    const tokenData = await squareApiHelpers.executeWithRetry(
+      refreshTokenFn,
+      null, // No client needed as we're using axios directly
+      tokenRefreshConfig
+    );
+    
+    console.log('Successfully refreshed access token');
+    
+    return {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_at: tokenData.expires_at,
+      merchant_id: tokenData.merchant_id
+    };
+  } catch (error) {
+    console.error('Error refreshing access token:', error.response?.data || error.message);
+    
+    // Create an informative error with better details for debugging
+    const tokenError = new Error(
+      error.response?.data?.message || 
+      error.response?.data?.error_description || 
+      error.message
+    );
+    
+    tokenError.code = error.response?.data?.error || 'TOKEN_REFRESH_ERROR';
+    tokenError.statusCode = error.response?.status || 500;
+    
+    // Indicate if re-authentication is required
+    if (error.requiresReauthentication || 
+        (error.response?.status === 400 && 
+        (error.response?.data?.error === 'invalid_grant' || 
+         error.response?.data?.error_description?.includes('refresh token')))) {
+      tokenError.requiresReauthentication = true;
+    }
+    
+    throw tokenError;
   }
 }
 
@@ -391,5 +612,6 @@ module.exports = {
   generateCodeChallenge,
   getSquareCredentials,
   executeSquareRequest,
-  verifyWebhookSignature
+  verifyWebhookSignature,
+  refreshAccessToken
 };
