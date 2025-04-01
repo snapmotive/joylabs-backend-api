@@ -281,24 +281,52 @@ const handler = async (event, context) => {
     const method = event.httpMethod || event.requestContext?.http?.method || 'GET';
     const queryParams = event.queryStringParameters || {};
     
+    // Set standard headers for all responses
+    const standardHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Type': 'application/json'
+    };
+    
     // Authenticate the request
     const authResult = await authenticateRequest(event);
     if (!authResult.isAuthenticated) {
       return {
         statusCode: authResult.error.statusCode,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json'
-        },
-        body: safeJSONStringify({ error: authResult.error.message })
+        headers: standardHeaders,
+        body: safeJSONStringify({ 
+          success: false,
+          error: { 
+            message: authResult.error.message,
+            code: 'AUTHENTICATION_ERROR' 
+          }
+        })
       };
     }
     
     const { user } = authResult;
     
-    // Check the path to determine which handler to call
-    if (path.includes('/v2/catalog/list')) {
-      // List catalog items
+    // Parse request body for POST/PUT requests
+    let requestBody = {};
+    if ((method === 'POST' || method === 'PUT') && event.body) {
+      try {
+        requestBody = JSON.parse(event.body);
+      } catch (e) {
+        return {
+          statusCode: 400,
+          headers: standardHeaders,
+          body: safeJSONStringify({
+            success: false,
+            error: {
+              message: 'Invalid JSON in request body',
+              code: 'INVALID_REQUEST'
+            }
+          })
+        };
+      }
+    }
+    
+    // 1. Handle GET /v2/catalog/list endpoint
+    if (path.includes('/v2/catalog/list') && method === 'GET') {
       const { types = 'ITEM,CATEGORY', limit = 100, cursor } = queryParams;
       
       console.log('Listing catalog items with params:', { types, limit, cursor });
@@ -309,25 +337,261 @@ const handler = async (event, context) => {
       
       return {
         statusCode: 200,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Content-Type': 'application/json'
-        },
-        body: safeJSONStringify(response)
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          objects: response.objects || [],
+          cursor: response.cursor
+        })
       };
     }
     
-    // Add other route handlers here
-    // ...
+    // 2. Handle POST /v2/catalog/search endpoint
+    if (path.includes('/v2/catalog/search') && method === 'POST') {
+      console.log('Searching catalog with criteria:', requestBody);
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.searchCatalogObjects(requestBody);
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          objects: response.objects || [],
+          cursor: response.cursor,
+          matchedVariationIds: response.matchedVariationIds || []
+        })
+      };
+    }
+    
+    // 3. Handle GET /v2/catalog/item/{id} endpoint
+    if (path.match(/\/v2\/catalog\/item\/[\w-]+$/) && method === 'GET') {
+      // Extract item ID from the path
+      const itemId = path.split('/').pop();
+      
+      console.log('Getting catalog item by ID:', itemId);
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.retrieveCatalogObject(itemId, true);
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          item: response.object,
+          relatedObjects: response.relatedObjects || []
+        })
+      };
+    }
+    
+    // 4. Handle POST /v2/catalog/item endpoint
+    if (path.includes('/v2/catalog/item') && method === 'POST' && !path.includes('/modifier-lists') && !path.includes('/taxes')) {
+      console.log('Creating/updating catalog item:', requestBody.name || 'Unnamed Item');
+      
+      // Prepare the catalog object
+      const catalogObject = {
+        type: requestBody.type || 'ITEM',
+        id: requestBody.id || `#${Math.random().toString(36).substring(2, 15)}`,
+        presentAtAllLocations: true
+      };
+      
+      // Add type-specific data
+      if (catalogObject.type === 'ITEM') {
+        catalogObject.itemData = {
+          name: requestBody.name,
+          description: requestBody.description,
+          abbreviation: requestBody.abbreviation,
+          categoryId: requestBody.categoryId,
+          variations: requestBody.variations || [],
+          // Add other fields as needed
+        };
+      } else if (catalogObject.type === 'CATEGORY') {
+        catalogObject.categoryData = {
+          name: requestBody.name
+        };
+      }
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.upsertCatalogObject({
+          idempotencyKey: requestBody.idempotencyKey || `${Date.now()}`,
+          object: catalogObject
+        });
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          item: response.catalogObject,
+          idempotencyKey: response.idempotencyKey
+        })
+      };
+    }
+    
+    // 5. Handle DELETE /v2/catalog/item/{id} endpoint
+    if (path.match(/\/v2\/catalog\/item\/[\w-]+$/) && method === 'DELETE') {
+      // Extract item ID from the path
+      const itemId = path.split('/').pop();
+      
+      console.log('Deleting catalog item by ID:', itemId);
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.deleteCatalogObject(itemId);
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          deletedObjectIds: response.deletedObjectIds || [],
+          deletedAt: response.deletedAt
+        })
+      };
+    }
+    
+    // 6. Handle POST /v2/catalog/batch-retrieve endpoint
+    if (path.includes('/v2/catalog/batch-retrieve') && method === 'POST') {
+      console.log('Batch retrieving catalog objects:', requestBody);
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.batchRetrieveCatalogObjects(requestBody);
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          objects: response.objects || [],
+          relatedObjects: response.relatedObjects || []
+        })
+      };
+    }
+    
+    // 7. Handle POST /v2/catalog/batch-upsert endpoint
+    if (path.includes('/v2/catalog/batch-upsert') && method === 'POST') {
+      console.log('Batch upserting catalog objects');
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.batchUpsertCatalogObjects({
+          idempotencyKey: requestBody.idempotencyKey || `${Date.now()}`,
+          batches: requestBody.batches || []
+        });
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          objects: response.objects || [],
+          idempotencyKey: response.idempotencyKey,
+          updatedAt: response.updatedAt
+        })
+      };
+    }
+    
+    // 8. Handle POST /v2/catalog/batch-delete endpoint
+    if (path.includes('/v2/catalog/batch-delete') && method === 'POST') {
+      console.log('Batch deleting catalog objects');
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.batchDeleteCatalogObjects({
+          objectIds: requestBody.objectIds || []
+        });
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          deletedObjectIds: response.deletedObjectIds || [],
+          deletedAt: response.deletedAt
+        })
+      };
+    }
+    
+    // 9. Handle POST /v2/catalog/update-item-modifier-lists endpoint
+    if (path.includes('/v2/catalog/update-item-modifier-lists') && method === 'POST') {
+      console.log('Updating item modifier lists');
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.updateItemModifierLists({
+          itemIds: requestBody.itemIds || [],
+          modifierListsToEnable: requestBody.modifierListsToEnable || [],
+          modifierListsToDisable: requestBody.modifierListsToDisable || []
+        });
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          updatedAt: response.updatedAt
+        })
+      };
+    }
+    
+    // 10. Handle POST /v2/catalog/update-item-taxes endpoint
+    if (path.includes('/v2/catalog/update-item-taxes') && method === 'POST') {
+      console.log('Updating item taxes');
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.updateItemTaxes({
+          itemIds: requestBody.itemIds || [],
+          taxesToEnable: requestBody.taxesToEnable || [],
+          taxesToDisable: requestBody.taxesToDisable || []
+        });
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          updatedAt: response.updatedAt
+        })
+      };
+    }
+    
+    // 11. Handle POST /v2/catalog/search-catalog-items endpoint (newer Square API endpoint)
+    if (path.includes('/v2/catalog/search-catalog-items') && method === 'POST') {
+      console.log('Searching catalog items with advanced filters');
+      
+      const response = await executeSquareRequest(async (client) => {
+        return await client.catalogApi.searchCatalogItems(requestBody);
+      }, user.squareAccessToken);
+      
+      return {
+        statusCode: 200,
+        headers: standardHeaders,
+        body: safeJSONStringify({
+          success: true,
+          items: response.items || [],
+          cursor: response.cursor
+        })
+      };
+    }
     
     // Return 404 if no matching route
     return {
       statusCode: 404,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Content-Type': 'application/json'
-      },
-      body: safeJSONStringify({ error: 'Route not found' })
+      headers: standardHeaders,
+      body: safeJSONStringify({
+        success: false,
+        error: { 
+          message: 'Route not found', 
+          code: 'NOT_FOUND'
+        }
+      })
     };
   } catch (error) {
     console.error('Unhandled error in catalog handler:', error);
@@ -339,8 +603,11 @@ const handler = async (event, context) => {
         'Content-Type': 'application/json'
       },
       body: safeJSONStringify({
-        error: 'Internal server error',
-        message: error.message
+        success: false,
+        error: {
+          message: error.message || 'Internal server error',
+          code: error.code || 'INTERNAL_ERROR'
+        }
       })
     };
   }
