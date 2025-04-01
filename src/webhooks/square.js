@@ -10,36 +10,25 @@ const dynamoDb = DynamoDBDocumentClient.from(client);
 /**
  * Verify Square webhook signature to ensure authenticity
  * @param {Object} request Express request object
- * @returns {boolean} True if signature is valid
+ * @returns {Promise<boolean>} True if signature is valid
  */
 const verifyWebhookSignature = async (request) => {
   try {
-    const credentials = await squareService.getSquareCredentials();
-    const signatureKey = credentials.SQUARE_WEBHOOK_SIGNATURE_KEY;
+    console.log('Verifying webhook signature using centralized square service');
     
-    if (!signatureKey) {
-      console.error('Webhook signature key not configured');
-      return false;
-    }
-    
-    const signature = request.headers['x-square-signature'];
+    const signature = request.headers['square-signature'];
     if (!signature) {
       console.error('No signature found in request headers');
       return false;
     }
     
-    // Create HMAC using the signature key
-    const hmac = crypto.createHmac('sha256', signatureKey);
-    hmac.update(JSON.stringify(request.body));
+    if (!request.rawBody) {
+      console.error('No raw body available in request');
+      return false;
+    }
     
-    // Generate signature
-    const expectedSignature = hmac.digest('base64');
-    
-    // Verify signature
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expectedSignature)
-    );
+    // Use the centralized function from square service
+    return await squareService.verifyWebhookSignature(signature, request.rawBody);
   } catch (error) {
     console.error('Error verifying webhook signature:', error);
     return false;

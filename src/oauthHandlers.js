@@ -20,8 +20,10 @@ const {
 const { authCors } = require('./middleware/cors');
 const { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand } = require('@aws-sdk/client-dynamodb');
 const { marshall, unmarshall } = require('@aws-sdk/util-dynamodb');
-const { Client } = require('square');
 const squareService = require('./services/square');
+
+// Import Square v42 SDK
+const { SquareClient } = require('square');
 
 const app = express();
 const dynamoDb = new DynamoDBClient();
@@ -231,12 +233,7 @@ app.get('/api/auth/square/callback', async (req, res) => {
       console.log('Successfully exchanged code for tokens');
 
       // Get merchant info using the access token
-      const client = new Client({
-        accessToken: tokenResponse.access_token,
-        environment: 'production'
-      });
-
-      const { result } = await client.merchantsApi.retrieveMerchant(tokenResponse.merchant_id);
+      const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
       console.log('Retrieved merchant info');
 
       // Clean up used state
@@ -249,7 +246,7 @@ app.get('/api/auth/square/callback', async (req, res) => {
       await dynamoDb.send(new DeleteItemCommand(deleteStateParams));
 
       // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
-      const sanitizedBusinessName = encodeURIComponent(result.merchant.businessName || '');
+      const sanitizedBusinessName = encodeURIComponent(merchantInfo.businessName || '');
       const finalRedirectUrl = `joylabs://square-callback?access_token=${encodeURIComponent(tokenResponse.access_token)}&refresh_token=${encodeURIComponent(tokenResponse.refresh_token)}&merchant_id=${encodeURIComponent(tokenResponse.merchant_id)}&business_name=${sanitizedBusinessName}`;
 
       // Debug logging for redirect URL
@@ -261,7 +258,7 @@ app.get('/api/auth/square/callback', async (req, res) => {
           access_token: `${tokenResponse.access_token.substring(0, 5)}...${tokenResponse.access_token.substring(tokenResponse.access_token.length - 5)}`,
           refresh_token: `${tokenResponse.refresh_token.substring(0, 5)}...${tokenResponse.refresh_token.substring(tokenResponse.refresh_token.length - 5)}`,
           merchant_id: tokenResponse.merchant_id,
-          business_name: result.merchant.businessName
+          business_name: merchantInfo.businessName
         }
       });
 
@@ -332,9 +329,10 @@ async function validateToken(req, res) {
     const squareClient = squareService.getSquareClient(token);
     
     // Attempt to validate the token by making a lightweight API call
-    const { result } = await squareClient.merchantsApi.retrieveMerchant('me');
+    // Use our updated getMerchantInfo function which handles the API correctly
+    const merchantInfo = await squareService.getMerchantInfo(token);
     
-    if (!result || !result.merchant || !result.merchant.id) {
+    if (!merchantInfo || !merchantInfo.id) {
       console.error('Token validation failed: Invalid Square response');
       return res.status(401).json({
         success: false,
@@ -342,13 +340,13 @@ async function validateToken(req, res) {
       });
     }
 
-    console.log('Token validation successful for merchant:', result.merchant.id);
+    console.log('Token validation successful for merchant:', merchantInfo.id);
     
-    // Return success response
+    // Return success response with merchant data
     return res.status(200).json({
       success: true,
-      merchantId: result.merchant.id,
-      businessName: result.merchant.business_name || result.merchant.business_email || 'Unknown'
+      merchantId: merchantInfo.id,
+      businessName: merchantInfo.businessName || 'Unknown'
     });
   } catch (error) {
     console.error('Square API token validation error:', {
@@ -384,7 +382,7 @@ module.exports.handler = serverless(app);
 exports.handleSquareCallback = async (event) => {
   console.log('Received Square callback with query parameters:', event.queryStringParameters);
   
-  const { code, state, error, app_callback } = event.queryStringParameters || {};
+  const { code, state, error } = event.queryStringParameters || {};
   
   // Handle errors from Square
   if (error) {
@@ -422,11 +420,30 @@ exports.handleSquareCallback = async (event) => {
   try {
     // Exchange code for tokens
     console.log('Exchanging code for tokens...');
-    const tokenResponse = await squareService.exchangeCodeForToken(code);
+    let tokenResponse;
+    try {
+      tokenResponse = await squareService.exchangeCodeForToken(code);
+      console.log('Successfully exchanged code for tokens');
+    } catch (tokenError) {
+      console.error('Failed to exchange code for token:', tokenError);
+      throw new Error(`Token exchange failed: ${tokenError.message}`);
+    }
+    
+    if (!tokenResponse || !tokenResponse.access_token) {
+      throw new Error('Invalid token response - missing access token');
+    }
     
     // Get merchant info
     console.log('Getting merchant info...');
-    const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+    let merchantInfo;
+    try {
+      merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+      console.log('Successfully retrieved merchant info');
+    } catch (merchantError) {
+      console.error('Error getting merchant info:', merchantError);
+      // Continue with just the token info if merchant info fails
+      merchantInfo = { businessName: '' };
+    }
     
     // Clear state from store
     stateStore.delete(state);

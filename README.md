@@ -156,7 +156,7 @@ Primary dependencies (from package.json):
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.0",
     "serverless-http": "^3.2.0",
-    "square": "^35.1.0"
+    "square": "^42.0.0"
   }
 }
 ```

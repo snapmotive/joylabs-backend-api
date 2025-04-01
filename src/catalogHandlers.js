@@ -12,6 +12,7 @@ const catalogRoutes = require('./routes/catalog');
 const { getSquareClient, executeSquareRequest } = require('./services/square');
 const catalogService = require('./services/catalog');
 const { safeSerialize } = require('./utils/errorHandling');
+const squareService = require('./services/square');
 
 // Initialize express app
 const app = express();
@@ -366,10 +367,10 @@ const authenticateRequest = async (event) => {
     
     // Validate token by making a lightweight request to Square API
     try {
-      const squareClient = getSquareClient(token);
-      const { result } = await squareClient.merchantsApi.retrieveMerchant('me');
+      // Use our squareService to properly handle different API versions
+      const merchantInfo = await squareService.getMerchantInfo(token);
       
-      if (!result || !result.merchant) {
+      if (!merchantInfo || !merchantInfo.id) {
         return {
           isAuthenticated: false,
           error: {
@@ -380,16 +381,16 @@ const authenticateRequest = async (event) => {
       }
       
       console.log('Authenticated merchant:', {
-        merchantId: result.merchant.id,
-        businessName: result.merchant.business_name || 'Unknown'
+        merchantId: merchantInfo.id,
+        businessName: merchantInfo.businessName || 'Unknown'
       });
       
       return {
         isAuthenticated: true,
         user: {
-          merchantId: result.merchant.id,
+          merchantId: merchantInfo.id,
           squareAccessToken: token,
-          businessName: result.merchant.business_name || result.merchant.business_email || 'Unknown'
+          businessName: merchantInfo.businessName || 'Unknown'
         }
       };
     } catch (error) {
@@ -479,8 +480,7 @@ const handler = async (event, context) => {
       try {
         // Use the Square client to directly list catalog items
         // This bypasses our service that tries to access DynamoDB
-        const client = getSquareClient(user.squareAccessToken);
-        const catalogApi = client.catalogApi;
+        const client = squareService.getSquareClient(user.squareAccessToken);
         
         // Parse types properly
         const typesArray = typeof types === 'string' ? types.split(',') : types;
@@ -492,7 +492,7 @@ const handler = async (event, context) => {
         }, null, 2));
         
         // CORRECT SDK USAGE: Pass individual parameters instead of an object
-        const squareResponse = await catalogApi.listCatalog(typesArray, cursor, parseInt(limit));
+        const squareResponse = await client.catalog.listCatalog(typesArray, cursor, parseInt(limit));
         
         return {
           statusCode: 200,

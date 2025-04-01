@@ -54,7 +54,7 @@ app.post('/api/webhooks/square', async (req, res) => {
     
     console.log('Request body length:', req.rawBody ? req.rawBody.length : 'not captured');
     
-    // Verify webhook signature - now using async function
+    // Verify webhook signature with the updated function
     const isValidSignature = await squareService.verifyWebhookSignature(
       signature,
       req.rawBody
@@ -123,4 +123,4 @@ app.get('/api/webhooks/health', (req, res) => {
 });
 
 // Export Serverless handler
-exports.squareWebhook = serverless(app); 
+exports.handler = serverless(app); 

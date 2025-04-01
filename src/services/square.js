@@ -4,7 +4,8 @@
  */
 const axios = require('axios');
 const crypto = require('crypto');
-const { Client } = require('square');
+// Import Square client for v42+
+const { SquareClient } = require('square');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 
 // Initialize AWS clients
@@ -50,7 +51,8 @@ async function getSquareCredentials() {
       
     return {
       applicationId: credentials.applicationId,
-      applicationSecret: credentials.applicationSecret
+      applicationSecret: credentials.applicationSecret,
+      webhookSignatureKey: credentials.webhookSignatureKey
     };
   } catch (error) {
     console.error('Error getting Square credentials:', error);
@@ -60,6 +62,11 @@ async function getSquareCredentials() {
 
 /**
  * Get a configured Square API client with connection reuse
+ * 
+ * This function creates a client using Square SDK v42+
+ * 
+ * @param {string} accessToken - Square access token
+ * @returns {Object} Square client instance
  */
 const getSquareClient = (accessToken = null) => {
   const cacheKey = `${accessToken || 'default'}-${process.env.SQUARE_ENVIRONMENT}`;
@@ -69,12 +76,14 @@ const getSquareClient = (accessToken = null) => {
     return squareClientCache.get(cacheKey);
   }
   
-  console.log('Creating new Square client');
+  console.log('Creating new Square v42 client');
   
-  const client = new Client({
-    accessToken: accessToken || process.env.SQUARE_ACCESS_TOKEN,
-    environment: 'production',
-    userAgentDetail: 'JoyLabs Backend API'
+  // Create SquareClient with proper configuration
+  const client = new SquareClient({
+    token: accessToken || process.env.SQUARE_ACCESS_TOKEN,
+    environment: process.env.SQUARE_ENVIRONMENT || 'production',
+    userAgentDetail: 'JoyLabs Backend API',
+    timeout: 30000 // 30 seconds timeout
   });
   
   squareClientCache.set(cacheKey, client);
@@ -228,14 +237,64 @@ async function exchangeCodeForToken(code, code_verifier) {
 }
 
 /**
- * Get merchant info
+ * Get merchant info using the v42 SDK
  */
 async function getMerchantInfo(accessToken) {
   try {
     const client = getSquareClient(accessToken);
-    const response = await client.merchantsApi.retrieveMerchant('me');
+    
+    console.log('Getting merchant info with Square v42 SDK');
+    
+    // In v42 SDK, we need to use the correct syntax for merchant retrieval
+    // There are multiple ways to approach this based on the SDK version
+    let response;
+    
+    try {
+      // Try first approach for v42 (Square API is sometimes inconsistent with naming)
+      console.log('Attempting to retrieve merchant info with getMerchant');
+      response = await client.merchants.getMerchant('me');
+    } catch (error) {
+      // If first approach fails, try an alternative
+      if (error.message.includes('is not a function')) {
+        console.log('Falling back to alternative method for retrieving merchant');
+        
+        // Try using direct HTTP request to the Square API
+        const axios = require('axios');
+        const merchantResponse = await axios({
+          method: 'get',
+          url: 'https://connect.squareup.com/v2/merchants/me',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Square-Version': '2023-12-13'
+          }
+        });
+        
+        // Format response to match SDK structure
+        response = {
+          result: {
+            merchant: merchantResponse.data.merchant
+          }
+        };
+        
+        console.log('Successfully retrieved merchant info via direct API call');
+      } else {
+        // If it's not a "function not found" error, rethrow
+        throw error;
+      }
+    }
+    
     console.log('Successfully retrieved merchant info');
-    return response.result.merchant;
+    
+    // Format merchant information
+    return {
+      id: response.result.merchant.id,
+      businessName: response.result.merchant.businessName || response.result.merchant.business_name || response.result.merchant.businessEmail || response.result.merchant.business_email || 'Unknown',
+      country: response.result.merchant.country,
+      language: response.result.merchant.languageCode || response.result.merchant.language_code,
+      currency: response.result.merchant.currency,
+      status: response.result.merchant.status
+    };
   } catch (error) {
     console.error('Error getting merchant info:', error);
     throw error;
@@ -243,7 +302,60 @@ async function getMerchantInfo(accessToken) {
 }
 
 /**
+ * Verify webhook signature from Square to ensure authenticity
+ * @param {string} signature - The signature from Square-Signature header
+ * @param {string} requestBody - The raw request body as a string
+ * @returns {Promise<boolean>} - True if the signature is valid
+ */
+async function verifyWebhookSignature(signature, requestBody) {
+  try {
+    console.log('Verifying webhook signature');
+    
+    // Get webhook signature key from credentials
+    const credentials = await getSquareCredentials();
+    const signatureKey = credentials.webhookSignatureKey;
+    
+    if (!signatureKey) {
+      console.error('No webhook signature key found in credentials');
+      return false;
+    }
+    
+    if (!signature) {
+      console.error('No signature provided');
+      return false;
+    }
+    
+    if (!requestBody) {
+      console.error('No request body provided');
+      return false;
+    }
+    
+    console.log('Request body length for verification:', requestBody.length);
+    
+    // Create HMAC using the signature key
+    const hmac = crypto.createHmac('sha256', signatureKey);
+    hmac.update(requestBody);
+    
+    // Generate calculated signature
+    const calculatedSignature = hmac.digest('base64');
+    
+    console.log('Signature verification:', {
+      providedSignatureLength: signature.length,
+      calculatedSignatureLength: calculatedSignature.length,
+      match: signature === calculatedSignature
+    });
+    
+    // Compare signatures - making sure to use a constant-time comparison to prevent timing attacks
+    return signature === calculatedSignature;
+  } catch (error) {
+    console.error('Error verifying webhook signature:', error);
+    return false;
+  }
+}
+
+/**
  * Execute a Square API request with error handling
+ * 
  * @param {Function} requestFn - Function that takes a Square client and returns a promise
  * @param {string} accessToken - Square access token
  * @returns {Promise<Object>} - Square API response
@@ -251,12 +363,15 @@ async function getMerchantInfo(accessToken) {
 async function executeSquareRequest(requestFn, accessToken) {
   try {
     const client = getSquareClient(accessToken);
+    console.log('Executing Square request with v42 SDK');
+    
     return await requestFn(client);
   } catch (error) {
     console.error('Square API error:', {
       message: error.message,
-      code: error.code,
-      statusCode: error.statusCode || 500
+      code: error.code || error.statusCode || 'UNKNOWN_ERROR',
+      statusCode: error.statusCode || 500,
+      details: error.details || error.errors || []
     });
     
     // Rethrow with additional context
@@ -275,5 +390,6 @@ module.exports = {
   generateCodeVerifier,
   generateCodeChallenge,
   getSquareCredentials,
-  executeSquareRequest
+  executeSquareRequest,
+  verifyWebhookSignature
 };

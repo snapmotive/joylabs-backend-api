@@ -6,6 +6,7 @@ const { getSquareClient } = require('./square');
 const { handleSquareError } = require('../utils/errorHandling');
 const CatalogItem = require('../models/CatalogItem');
 const uuid = require('uuid');
+const squareService = require('./square');
 
 // Default catalog image size dimensions
 const DEFAULT_IMAGE_SIZE = { width: 300, height: 300 };
@@ -22,7 +23,7 @@ async function listCatalogItems(accessToken, options = {}) {
     console.log('Listing catalog items from Square with options:', JSON.stringify(options, null, 2));
     
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const { types = ['ITEM', 'CATEGORY'], page = 1, limit = 20 } = options;
     
@@ -103,7 +104,7 @@ async function getCatalogItem(accessToken, itemId) {
   try {
     console.log(`Getting catalog item: ${itemId}`);
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const response = await catalogApi.retrieveCatalogObject(itemId, true);
     
@@ -228,7 +229,7 @@ async function createOrUpdateCatalogItem(accessToken, itemData) {
   try {
     console.log('Creating/updating catalog item in Square');
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const idempotencyKey = itemData.idempotencyKey || uuid.v4();
     const catalogObject = prepareCatalogObject(itemData);
@@ -245,14 +246,15 @@ async function createOrUpdateCatalogItem(accessToken, itemData) {
     
     // Store reference in our database
     try {
-      const { merchant_id } = await client.merchantsApi.retrieveMerchant('me');
+      // Get merchant info using squareService
+      const merchantInfo = await squareService.getMerchantInfo(accessToken);
       
       await CatalogItem.create({
         id: uuid.v4(),
         square_catalog_id: response.result.catalogObject.id,
         name: catalogObject.itemData?.name || catalogObject.categoryData?.name || 'Unnamed Item',
         type: catalogObject.type,
-        merchant_id: merchant_id,
+        merchant_id: merchantInfo.id,
         metadata: {
           idempotencyKey,
           version: response.result.catalogObject.version
@@ -283,7 +285,7 @@ async function deleteCatalogItem(accessToken, itemId) {
   try {
     console.log(`Deleting catalog item: ${itemId}`);
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const response = await catalogApi.deleteCatalogObject(itemId);
     
@@ -545,7 +547,7 @@ async function batchRetrieveCatalogObjects(accessToken, objectIds, includeRelate
   try {
     console.log('Batch retrieving catalog objects');
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const response = await catalogApi.batchRetrieveCatalogObjects({
       objectIds,
@@ -573,7 +575,7 @@ async function batchUpsertCatalogObjects(accessToken, batches) {
   try {
     console.log('Batch upserting catalog objects');
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const idempotencyKey = uuid.v4();
     const response = await catalogApi.batchUpsertCatalogObjects({
@@ -603,7 +605,7 @@ async function batchDeleteCatalogObjects(accessToken, objectIds) {
   try {
     console.log('Batch deleting catalog objects');
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const response = await catalogApi.batchDeleteCatalogObjects({
       objectIds
@@ -644,7 +646,7 @@ async function updateItemModifierLists(accessToken, itemId, modifierListsToEnabl
   try {
     console.log(`Updating modifier lists for item: ${itemId}`);
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const response = await catalogApi.updateItemModifierLists({
       itemIds: [itemId],
@@ -674,7 +676,7 @@ async function updateItemTaxes(accessToken, itemId, taxesToEnable = [], taxesToD
   try {
     console.log(`Updating taxes for item: ${itemId}`);
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     const response = await catalogApi.updateItemTaxes({
       itemIds: [itemId],
@@ -831,7 +833,7 @@ async function listCatalogCategories(accessToken, options = {}) {
     console.log('Listing catalog categories from Square - simplified call without DB access');
     
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalogApi;
+    const catalogApi = client.catalog;
     
     // Force options to only get categories
     const { limit = 200, cursor } = options;
