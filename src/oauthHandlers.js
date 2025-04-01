@@ -277,6 +277,104 @@ app.get('/api/auth/square/callback', async (req, res) => {
   }
 });
 
+// Token Validation Endpoints - support both GET and POST
+app.options('/api/auth/validate-token', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Max-Age', '86400');
+  res.status(204).end();
+});
+
+app.get('/api/auth/validate-token', async (req, res) => {
+  try {
+    console.log('Token validation request received (GET)');
+    validateToken(req, res);
+  } catch (error) {
+    handleValidationError(error, res);
+  }
+});
+
+app.post('/api/auth/validate-token', async (req, res) => {
+  try {
+    console.log('Token validation request received (POST)');
+    validateToken(req, res);
+  } catch (error) {
+    handleValidationError(error, res);
+  }
+});
+
+// Helper function to validate token
+async function validateToken(req, res) {
+  // Get token from Authorization header
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.log('Missing or invalid Authorization header');
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication failed - No bearer token provided'
+    });
+  }
+
+  // Extract token
+  const token = authHeader.split(' ')[1];
+  if (!token) {
+    console.log('Empty token provided');
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication failed - Empty token'
+    });
+  }
+
+  try {
+    // Initialize Square client with the token
+    console.log('Validating Square access token...');
+    const squareClient = squareService.getSquareClient(token);
+    
+    // Attempt to validate the token by making a lightweight API call
+    const { result } = await squareClient.merchantsApi.retrieveMerchant('me');
+    
+    if (!result || !result.merchant || !result.merchant.id) {
+      console.error('Token validation failed: Invalid Square response');
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed - Invalid merchant data'
+      });
+    }
+
+    console.log('Token validation successful for merchant:', result.merchant.id);
+    
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      merchantId: result.merchant.id,
+      businessName: result.merchant.business_name || result.merchant.business_email || 'Unknown'
+    });
+  } catch (error) {
+    console.error('Square API token validation error:', {
+      name: error.name,
+      message: error.message,
+      status: error.statusCode
+    });
+
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication failed - Invalid token',
+      error: error.message || 'Failed to validate Square token'
+    });
+  }
+}
+
+// Helper function to handle validation errors
+function handleValidationError(error, res) {
+  console.error('Unexpected token validation error:', error);
+  return res.status(500).json({
+    success: false,
+    message: 'Server error during token validation',
+    error: error.message
+  });
+}
+
 // Export the serverless handler
 module.exports.handler = serverless(app);
 

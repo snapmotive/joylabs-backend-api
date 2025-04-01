@@ -223,23 +223,97 @@ router.delete('/item/:id', protect, async (req, res) => {
 });
 
 /**
- * @route POST /api/catalog/search
- * @desc Search catalog items
+ * @route POST /search
+ * @desc Search catalog objects using Square-compatible params
  * @access Private
  */
 router.post('/search', protect, async (req, res) => {
   try {
+    console.log('[REQUEST BOUNDARY: CATALOG SEARCH START]');
+    console.log('[ROUTES] Received catalog search request:', JSON.stringify(req.body, null, 2));
+    
+    // Directly handle the empty query case - Defense in depth
+    let searchParams = {...req.body};
+    
+    // Check if query is missing or empty
+    if (!searchParams.query || (typeof searchParams.query === 'object' && Object.keys(searchParams.query).length === 0)) {
+      console.log('[ROUTES] Empty query detected in handler, using default exact_query');
+      searchParams.query = {
+        exact_query: {
+          attribute_name: "name",
+          attribute_value: "."  // Use a very common character to match almost everything
+        }
+      };
+    } else if (searchParams.query.text_query) {
+      // Special handling for text_query with incorrect format
+      if (searchParams.query.text_query.query !== undefined) {
+        // Frontend sent text_query with 'query' field instead of 'keywords' array
+        const queryText = searchParams.query.text_query.query;
+        
+        if (queryText && queryText.trim() !== '') {
+          // If there's actual text, convert to proper keywords array format
+          console.log('[ROUTES] Converting text_query.query to keywords array');
+          searchParams.query.text_query = {
+            keywords: [queryText.trim()]
+          };
+        } else {
+          // Empty query text, use our reliable exact_query approach
+          console.log('[ROUTES] Empty text_query.query detected, using exact_query instead');
+          searchParams.query = {
+            exact_query: {
+              attribute_name: "name",
+              attribute_value: "."
+            }
+          };
+        }
+      } else if (!searchParams.query.text_query.keywords || 
+                !Array.isArray(searchParams.query.text_query.keywords) ||
+                searchParams.query.text_query.keywords.length === 0) {
+        // Malformed text_query without keywords array or with empty array
+        console.log('[ROUTES] Malformed text_query detected, using exact_query instead');
+        searchParams.query = {
+          exact_query: {
+            attribute_name: "name",
+            attribute_value: "."
+          }
+        };
+      }
+    } else {
+      // Not using text_query, check other query types for validity
+      const validQueryTypes = [
+        'prefix_query', 'exact_query', 'sorted_attribute_query', 'text_query',
+        'item_query', 'item_variation_query', 'items_for_tax_query',
+        'items_for_modifier_list_query', 'items_for_item_options'
+      ];
+      
+      const queryKeys = Object.keys(searchParams.query).filter(key => validQueryTypes.includes(key));
+      
+      if (queryKeys.length === 0) {
+        console.log('[ROUTES] No valid query types found in request, using default exact_query');
+        searchParams.query = { 
+          exact_query: {
+            attribute_name: "name",
+            attribute_value: "."  // Use a very common character to match almost everything
+          }
+        };
+      }
+    }
+    
+    console.log('[ROUTES] Modified search params:', JSON.stringify(searchParams, null, 2));
+    
     const result = await catalogService.searchCatalogItems(
       req.user.squareAccessToken,
-      req.body
+      searchParams
     );
     
+    console.log('[REQUEST BOUNDARY: CATALOG SEARCH END] Success:', result.success);
     res.json(result);
   } catch (error) {
-    console.error('Error searching catalog items:', error);
+    console.error('[REQUEST BOUNDARY: CATALOG SEARCH END] Error:', error.message);
+    console.error('[ROUTES] Error searching catalog objects:', error);
     res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || 'Failed to search catalog items',
+      message: error.message || 'Failed to search catalog objects',
       error: error.details || error.toString()
     });
   }
@@ -404,6 +478,35 @@ router.post('/item/:id/taxes', protect, validateRequest({
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to update item taxes',
+      error: error.details || error.toString()
+    });
+  }
+});
+
+/**
+ * @route GET /categories
+ * @desc Get all categories - convenience route that uses search
+ * @access Private
+ */
+router.get('/categories', protect, async (req, res) => {
+  try {
+    // Use the search endpoint with object_types set to CATEGORY
+    const result = await catalogService.searchCatalogItems(
+      req.user.squareAccessToken,
+      {
+        object_types: ['CATEGORY'],
+        limit: req.query.limit ? parseInt(req.query.limit) : 100,
+        cursor: req.query.cursor,
+        include_related_objects: req.query.include_related_objects === 'true'
+      }
+    );
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error getting categories:', error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to get categories',
       error: error.details || error.toString()
     });
   }

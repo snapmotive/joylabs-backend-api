@@ -4,6 +4,44 @@
  */
 
 /**
+ * Safe JSON serialization that handles BigInt values by converting them to strings
+ * @param {Object} data - The data to serialize
+ * @returns {Object} - Safely serializable object
+ */
+function safeSerialize(data) {
+  if (data === null || data === undefined) {
+    return data;
+  }
+  
+  try {
+    // First convert to JSON string, handling BigInt, then parse back to object
+    return JSON.parse(JSON.stringify(data, (_, value) => 
+      typeof value === 'bigint' ? value.toString() : value
+    ));
+  } catch (error) {
+    console.error('Error in safeSerialize:', error);
+    // If serialization fails, do a manual traversal
+    if (typeof data === 'object') {
+      const result = Array.isArray(data) ? [] : {};
+      for (const key in data) {
+        if (Object.prototype.hasOwnProperty.call(data, key)) {
+          const value = data[key];
+          if (typeof value === 'bigint') {
+            result[key] = value.toString();
+          } else if (typeof value === 'object' && value !== null) {
+            result[key] = safeSerialize(value);
+          } else {
+            result[key] = value;
+          }
+        }
+      }
+      return result;
+    }
+    return data;
+  }
+}
+
+/**
  * Handle Square API errors in a standardized way
  * @param {Object} error - Square API error object
  * @param {string} defaultMessage - Default error message
@@ -121,7 +159,9 @@ function createApiResponse(success, data = null, message = null) {
   
   if (success && data) {
     // For success responses, include data directly in the response
-    Object.assign(response, data);
+    // Ensure BigInt values are properly serialized
+    const safeData = safeSerialize(data);
+    Object.assign(response, safeData);
     if (message) {
       response.message = message;
     }
@@ -130,7 +170,7 @@ function createApiResponse(success, data = null, message = null) {
     response.error = {
       message: message || 'An error occurred',
       code: data?.code || 'UNKNOWN_ERROR',
-      details: data?.details || []
+      details: safeSerialize(data?.details) || []
     };
   }
   
@@ -139,5 +179,6 @@ function createApiResponse(success, data = null, message = null) {
 
 module.exports = {
   handleSquareError,
-  createApiResponse
+  createApiResponse,
+  safeSerialize
 }; 

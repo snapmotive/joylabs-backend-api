@@ -155,6 +155,14 @@ functions:
           path: /v2/catalog/search
           method: post
           cors: true
+      - http:
+          path: /v2/catalog/categories
+          method: get
+          cors: true
+      - http:
+          path: /v2/catalog/list-categories
+          method: get
+          cors: true
       # Legacy path support (for backward compatibility)
       - http:
           path: /api/catalog/list
@@ -195,6 +203,14 @@ functions:
       - http:
           path: /api/auth/square/callback
           method: get
+          cors: true
+      - http:
+          path: /api/auth/validate-token
+          method: get
+          cors: true
+      - http:
+          path: /api/auth/validate-token
+          method: post
           cors: true
     environment:
       SQUARE_CREDENTIALS_SECRET: ${self:custom.squareCredentialsSecret}

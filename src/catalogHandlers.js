@@ -10,6 +10,8 @@ const { protect } = require('./middleware/auth');
 const configureCors = require('./middleware/cors');
 const catalogRoutes = require('./routes/catalog');
 const { getSquareClient, executeSquareRequest } = require('./services/square');
+const catalogService = require('./services/catalog');
+const { safeSerialize } = require('./utils/errorHandling');
 
 // Initialize express app
 const app = express();
@@ -44,10 +46,178 @@ app.use((req, res, next) => {
   console.log('Incoming catalog request:', {
     method: req.method,
     path: req.path,
+    originalUrl: req.originalUrl,
+    baseUrl: req.baseUrl,
     headers: req.headers,
     query: req.query
   });
   next();
+});
+
+// Direct handler for the categories endpoint
+app.get('/v2/catalog/categories', protect, async (req, res) => {
+  console.log('[REQUEST] Categories endpoint accessed:', req.path, req.originalUrl);
+  console.log('[REQUEST] User info:', {
+    merchantId: req.user.merchantId, 
+    businessName: req.user.businessName || 'Unknown'
+  });
+  
+  try {
+    const token = req.user.squareAccessToken;
+    
+    // Call the catalog service to get categories
+    console.log('[CATEGORIES] Calling catalogService.getCatalogCategories');
+    const result = await catalogService.getCatalogCategories(token);
+    
+    console.log('[CATEGORIES] Service call complete. Success:', result.success);
+    console.log('[CATEGORIES] Categories count:', result.categories ? result.categories.length : 0);
+    
+    if (!result.success) {
+      console.error('Error fetching categories:', result.error || result.message);
+      return res.status(result.status || 500).json(result);
+    }
+    
+    // Include merchant metadata in response
+    const enrichedResult = {
+      ...result,
+      metadata: {
+        merchantId: req.user.merchantId,
+        timestamp: new Date().toISOString(),
+        requestPath: req.path
+      }
+    };
+    
+    // Ensure response is safe to serialize
+    const safeResult = safeSerialize(enrichedResult);
+    return res.json(safeResult);
+  } catch (error) {
+    console.error('Error in categories endpoint:', error);
+    // Handle and serialize error response
+    const errorResponse = safeSerialize({
+      success: false,
+      message: error.message || 'Internal server error',
+      error: error.toString()
+    });
+    return res.status(500).json(errorResponse);
+  }
+});
+
+// NEW ENDPOINT: List all categories using the simpler ListCatalog endpoint
+app.get('/v2/catalog/list-categories', protect, async (req, res) => {
+  console.log('[REQUEST] List categories endpoint accessed:', req.path, req.originalUrl);
+  console.log('[REQUEST] User info:', {
+    merchantId: req.user.merchantId, 
+    businessName: req.user.businessName || 'Unknown'
+  });
+  
+  try {
+    const token = req.user.squareAccessToken;
+    
+    // Call the catalog service to list all categories using the function that doesn't access DynamoDB
+    console.log('[LIST-CATEGORIES] Calling catalogService.listCatalogCategories');
+    const result = await catalogService.listCatalogCategories(token, {
+      limit: 200            // Increase limit to get more categories
+    });
+    
+    console.log('[LIST-CATEGORIES] Service call complete. Success:', result.success);
+    console.log('[LIST-CATEGORIES] Categories count:', result.objects ? result.objects.length : 0);
+    
+    if (!result.success) {
+      console.error('Error listing categories:', result.error || result.message);
+      return res.status(result.status || 500).json(result);
+    }
+    
+    // Include merchant metadata in response
+    const enrichedResult = {
+      ...result,
+      categories: result.objects || [], // Rename to categories for consistency
+      metadata: {
+        merchantId: req.user.merchantId,
+        timestamp: new Date().toISOString(),
+        requestPath: req.path,
+        method: 'ListCatalog'
+      }
+    };
+    
+    // Ensure response is safe to serialize
+    const safeResult = safeSerialize(enrichedResult);
+    return res.json(safeResult);
+  } catch (error) {
+    console.error('Error in list categories endpoint:', error);
+    // Handle and serialize error response
+    const errorResponse = safeSerialize({
+      success: false,
+      message: error.message || 'Internal server error',
+      error: error.toString()
+    });
+    return res.status(500).json(errorResponse);
+  }
+});
+
+// Handle the root handler for the /v2/catalog/list route
+app.get('/v2/catalog/list', protect, async (req, res) => {
+  console.log('[REQUEST] List endpoint accessed:', req.path, req.originalUrl);
+  console.log('[REQUEST] User info:', {
+    merchantId: req.user.merchantId, 
+    businessName: req.user.businessName || 'Unknown'
+  });
+  
+  try {
+    const token = req.user.squareAccessToken;
+    
+    // Parse query parameters
+    const { types = 'ITEM', limit = 100, cursor } = req.query;
+    
+    // Make direct API call to Square
+    const axios = require('axios');
+    
+    console.log('Making ListCatalog request with params:', JSON.stringify({
+      types: Array.isArray(types) ? types.join(',') : types,
+      limit: parseInt(limit),
+      cursor
+    }, null, 2));
+    
+    const response = await axios({
+      method: 'get',
+      url: 'https://connect.squareup.com/v2/catalog/list',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Square-Version': '2023-12-13'
+      },
+      params: {
+        types: Array.isArray(types) ? types.join(',') : types,
+        limit: parseInt(limit),
+        cursor
+      }
+    });
+    
+    // Include merchant metadata in response
+    const enrichedResult = {
+      success: true,
+      objects: response.data.objects || [],
+      cursor: response.data.cursor,
+      metadata: {
+        merchantId: req.user.merchantId,
+        timestamp: new Date().toISOString(),
+        requestPath: req.path,
+        method: 'ListCatalog'
+      }
+    };
+    
+    // Ensure response is safe to serialize
+    const safeResult = safeSerialize(enrichedResult);
+    return res.json(safeResult);
+  } catch (error) {
+    console.error('Error in list endpoint:', error);
+    // Handle and serialize error response
+    const errorResponse = safeSerialize({
+      success: false,
+      message: error.message || 'Internal server error',
+      error: error.toString()
+    });
+    return res.status(500).json(errorResponse);
+  }
 });
 
 // Mount catalog routes with v2 format only
@@ -71,6 +241,7 @@ app.get('/v2/catalog', (req, res) => {
       list: '/list',
       item: '/item/:id',
       search: '/search',
+      categories: '/categories',
       batchRetrieve: '/batch-retrieve',
       batchUpsert: '/batch-upsert',
       batchDelete: '/batch-delete',
@@ -96,11 +267,14 @@ app.options('*', configureCors());
 // Global error handler
 app.use((err, req, res, next) => {
   console.error('Catalog API Error:', err);
-  res.status(err.status || 500).json({
+  
+  const errorResponse = safeSerialize({
     success: false,
     message: err.message || 'Internal server error',
     error: process.env.NODE_ENV === 'production' ? 'An error occurred' : err.stack
   });
+  
+  res.status(err.status || 500).json(errorResponse);
 });
 
 // Enhanced logging for debugging
@@ -247,15 +421,14 @@ const authenticateRequest = async (event) => {
 
 /**
  * Helper function to safely serialize objects with BigInt values
+ * Uses the safeSerialize utility from errorHandling
  * @param {Object} data - The data to serialize
  * @returns {string} - JSON string
  */
 const safeJSONStringify = (data) => {
-  return JSON.stringify(data, (_, value) => 
-    typeof value === 'bigint' 
-      ? value.toString() 
-      : value
-  );
+  // Use the shared safeSerialize utility
+  const safeData = safeSerialize(data);
+  return JSON.stringify(safeData);
 };
 
 // Main handler function
@@ -281,317 +454,86 @@ const handler = async (event, context) => {
     const method = event.httpMethod || event.requestContext?.http?.method || 'GET';
     const queryParams = event.queryStringParameters || {};
     
-    // Set standard headers for all responses
-    const standardHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Content-Type': 'application/json'
-    };
-    
     // Authenticate the request
     const authResult = await authenticateRequest(event);
     if (!authResult.isAuthenticated) {
       return {
         statusCode: authResult.error.statusCode,
-        headers: standardHeaders,
-        body: safeJSONStringify({ 
-          success: false,
-          error: { 
-            message: authResult.error.message,
-            code: 'AUTHENTICATION_ERROR' 
-          }
-        })
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json'
+        },
+        body: safeJSONStringify({ error: authResult.error.message })
       };
     }
     
     const { user } = authResult;
     
-    // Parse request body for POST/PUT requests
-    let requestBody = {};
-    if ((method === 'POST' || method === 'PUT') && event.body) {
+    // Check the path to determine which handler to call
+    if (path.includes('/v2/catalog/list')) {
+      // List catalog items
+      const { types = 'ITEM,CATEGORY', limit = 100, cursor } = queryParams;
+      
+      console.log('Listing catalog items with params:', { types, limit, cursor });
+      
       try {
-        requestBody = JSON.parse(event.body);
-      } catch (e) {
+        // Use the Square client to directly list catalog items
+        // This bypasses our service that tries to access DynamoDB
+        const client = getSquareClient(user.squareAccessToken);
+        const catalogApi = client.catalogApi;
+        
+        // Parse types properly
+        const typesArray = typeof types === 'string' ? types.split(',') : types;
+        
+        console.log('Direct ListCatalog API call with request:', JSON.stringify({
+          types: typesArray,
+          limit: parseInt(limit),
+          cursor
+        }, null, 2));
+        
+        // CORRECT SDK USAGE: Pass individual parameters instead of an object
+        const squareResponse = await catalogApi.listCatalog(typesArray, cursor, parseInt(limit));
+        
         return {
-          statusCode: 400,
-          headers: standardHeaders,
+          statusCode: 200,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json'
+          },
+          body: safeJSONStringify({
+            success: true,
+            objects: squareResponse.result.objects || [],
+            cursor: squareResponse.result.cursor
+          })
+        };
+      } catch (error) {
+        console.error('Error directly calling Square ListCatalog API:', error);
+        return {
+          statusCode: 500,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json'
+          },
           body: safeJSONStringify({
             success: false,
-            error: {
-              message: 'Invalid JSON in request body',
-              code: 'INVALID_REQUEST'
-            }
+            error: error.message || 'Error calling Square API',
+            details: error.errors || []
           })
         };
       }
     }
     
-    // 1. Handle GET /v2/catalog/list endpoint
-    if (path.includes('/v2/catalog/list') && method === 'GET') {
-      const { types = 'ITEM,CATEGORY', limit = 100, cursor } = queryParams;
-      
-      console.log('Listing catalog items with params:', { types, limit, cursor });
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.listCatalog(cursor, types);
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          objects: response.objects || [],
-          cursor: response.cursor
-        })
-      };
-    }
-    
-    // 2. Handle POST /v2/catalog/search endpoint
-    if (path.includes('/v2/catalog/search') && method === 'POST') {
-      console.log('Searching catalog with criteria:', requestBody);
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.searchCatalogObjects(requestBody);
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          objects: response.objects || [],
-          cursor: response.cursor,
-          matchedVariationIds: response.matchedVariationIds || []
-        })
-      };
-    }
-    
-    // 3. Handle GET /v2/catalog/item/{id} endpoint
-    if (path.match(/\/v2\/catalog\/item\/[\w-]+$/) && method === 'GET') {
-      // Extract item ID from the path
-      const itemId = path.split('/').pop();
-      
-      console.log('Getting catalog item by ID:', itemId);
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.retrieveCatalogObject(itemId, true);
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          item: response.object,
-          relatedObjects: response.relatedObjects || []
-        })
-      };
-    }
-    
-    // 4. Handle POST /v2/catalog/item endpoint
-    if (path.includes('/v2/catalog/item') && method === 'POST' && !path.includes('/modifier-lists') && !path.includes('/taxes')) {
-      console.log('Creating/updating catalog item:', requestBody.name || 'Unnamed Item');
-      
-      // Prepare the catalog object
-      const catalogObject = {
-        type: requestBody.type || 'ITEM',
-        id: requestBody.id || `#${Math.random().toString(36).substring(2, 15)}`,
-        presentAtAllLocations: true
-      };
-      
-      // Add type-specific data
-      if (catalogObject.type === 'ITEM') {
-        catalogObject.itemData = {
-          name: requestBody.name,
-          description: requestBody.description,
-          abbreviation: requestBody.abbreviation,
-          categoryId: requestBody.categoryId,
-          variations: requestBody.variations || [],
-          // Add other fields as needed
-        };
-      } else if (catalogObject.type === 'CATEGORY') {
-        catalogObject.categoryData = {
-          name: requestBody.name
-        };
-      }
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.upsertCatalogObject({
-          idempotencyKey: requestBody.idempotencyKey || `${Date.now()}`,
-          object: catalogObject
-        });
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          item: response.catalogObject,
-          idempotencyKey: response.idempotencyKey
-        })
-      };
-    }
-    
-    // 5. Handle DELETE /v2/catalog/item/{id} endpoint
-    if (path.match(/\/v2\/catalog\/item\/[\w-]+$/) && method === 'DELETE') {
-      // Extract item ID from the path
-      const itemId = path.split('/').pop();
-      
-      console.log('Deleting catalog item by ID:', itemId);
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.deleteCatalogObject(itemId);
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          deletedObjectIds: response.deletedObjectIds || [],
-          deletedAt: response.deletedAt
-        })
-      };
-    }
-    
-    // 6. Handle POST /v2/catalog/batch-retrieve endpoint
-    if (path.includes('/v2/catalog/batch-retrieve') && method === 'POST') {
-      console.log('Batch retrieving catalog objects:', requestBody);
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.batchRetrieveCatalogObjects(requestBody);
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          objects: response.objects || [],
-          relatedObjects: response.relatedObjects || []
-        })
-      };
-    }
-    
-    // 7. Handle POST /v2/catalog/batch-upsert endpoint
-    if (path.includes('/v2/catalog/batch-upsert') && method === 'POST') {
-      console.log('Batch upserting catalog objects');
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.batchUpsertCatalogObjects({
-          idempotencyKey: requestBody.idempotencyKey || `${Date.now()}`,
-          batches: requestBody.batches || []
-        });
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          objects: response.objects || [],
-          idempotencyKey: response.idempotencyKey,
-          updatedAt: response.updatedAt
-        })
-      };
-    }
-    
-    // 8. Handle POST /v2/catalog/batch-delete endpoint
-    if (path.includes('/v2/catalog/batch-delete') && method === 'POST') {
-      console.log('Batch deleting catalog objects');
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.batchDeleteCatalogObjects({
-          objectIds: requestBody.objectIds || []
-        });
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          deletedObjectIds: response.deletedObjectIds || [],
-          deletedAt: response.deletedAt
-        })
-      };
-    }
-    
-    // 9. Handle POST /v2/catalog/update-item-modifier-lists endpoint
-    if (path.includes('/v2/catalog/update-item-modifier-lists') && method === 'POST') {
-      console.log('Updating item modifier lists');
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.updateItemModifierLists({
-          itemIds: requestBody.itemIds || [],
-          modifierListsToEnable: requestBody.modifierListsToEnable || [],
-          modifierListsToDisable: requestBody.modifierListsToDisable || []
-        });
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          updatedAt: response.updatedAt
-        })
-      };
-    }
-    
-    // 10. Handle POST /v2/catalog/update-item-taxes endpoint
-    if (path.includes('/v2/catalog/update-item-taxes') && method === 'POST') {
-      console.log('Updating item taxes');
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.updateItemTaxes({
-          itemIds: requestBody.itemIds || [],
-          taxesToEnable: requestBody.taxesToEnable || [],
-          taxesToDisable: requestBody.taxesToDisable || []
-        });
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          updatedAt: response.updatedAt
-        })
-      };
-    }
-    
-    // 11. Handle POST /v2/catalog/search-catalog-items endpoint (newer Square API endpoint)
-    if (path.includes('/v2/catalog/search-catalog-items') && method === 'POST') {
-      console.log('Searching catalog items with advanced filters');
-      
-      const response = await executeSquareRequest(async (client) => {
-        return await client.catalogApi.searchCatalogItems(requestBody);
-      }, user.squareAccessToken);
-      
-      return {
-        statusCode: 200,
-        headers: standardHeaders,
-        body: safeJSONStringify({
-          success: true,
-          items: response.items || [],
-          cursor: response.cursor
-        })
-      };
-    }
+    // Add other route handlers here
+    // ...
     
     // Return 404 if no matching route
     return {
       statusCode: 404,
-      headers: standardHeaders,
-      body: safeJSONStringify({
-        success: false,
-        error: { 
-          message: 'Route not found', 
-          code: 'NOT_FOUND'
-        }
-      })
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json'
+      },
+      body: safeJSONStringify({ error: 'Route not found' })
     };
   } catch (error) {
     console.error('Unhandled error in catalog handler:', error);
@@ -603,20 +545,33 @@ const handler = async (event, context) => {
         'Content-Type': 'application/json'
       },
       body: safeJSONStringify({
-        success: false,
-        error: {
-          message: error.message || 'Internal server error',
-          code: error.code || 'INTERNAL_ERROR'
-        }
+        error: 'Internal server error',
+        message: error.message
       })
     };
   }
 };
+
+// Add a catch-all handler at the end
+app.use('*', (req, res) => {
+  console.log('Catch-all route handler - Path not found:', {
+    method: req.method,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    baseUrl: req.baseUrl
+  });
+  
+  res.status(404).json({
+    success: false,
+    error: 'Route not found',
+    requestedPath: req.originalUrl
+  });
+});
 
 // Delete conflicting exports to clean up
 if (exports.handler) {
   delete exports.handler;
 }
 
-// Single, consistent export
-module.exports.handler = handler; 
+// Correctly export the Express app handler using serverless-http
+module.exports.handler = serverless(app); 
