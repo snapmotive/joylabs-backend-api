@@ -17,6 +17,16 @@ let squareCredentials = null;
 const squareClientCache = new Map();
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
 
+// Response cache with TTL for frequently accessed data
+const responseCache = new Map();
+// Cache TTLs in milliseconds
+const CACHE_TTL_CONFIG = {
+  merchantInfo: 5 * 60 * 1000,       // 5 minutes for merchant info
+  catalogCategories: 30 * 60 * 1000, // 30 minutes for catalog categories
+  catalogItems: 5 * 60 * 1000,       // 5 minutes for catalog items
+  other: 60 * 1000                   // 1 minute default
+};
+
 // Cache AWS clients for connection reuse
 let secretsClient = null;
 const getSecretsClient = () => {
@@ -27,6 +37,43 @@ const getSecretsClient = () => {
   }
   return secretsClient;
 };
+
+/**
+ * Get cached response or null if not in cache or expired
+ * @param {string} cacheKey - The cache key
+ * @param {string} cacheType - Type of data for TTL selection
+ * @returns {Object|null} The cached response or null
+ */
+function getCachedResponse(cacheKey, cacheType = 'other') {
+  if (responseCache.has(cacheKey)) {
+    const cachedItem = responseCache.get(cacheKey);
+    const now = Date.now();
+    
+    // Check if cache entry is still valid
+    if (now < cachedItem.expiry) {
+      console.log(`Using cached ${cacheType} data`);
+      return cachedItem.data;
+    } else {
+      // Remove expired entry
+      responseCache.delete(cacheKey);
+    }
+  }
+  return null;
+}
+
+/**
+ * Store response in cache with appropriate TTL
+ * @param {string} cacheKey - The cache key
+ * @param {Object} data - The data to cache
+ * @param {string} cacheType - Type of data for TTL selection
+ */
+function cacheResponse(cacheKey, data, cacheType = 'other') {
+  const ttl = CACHE_TTL_CONFIG[cacheType] || CACHE_TTL_CONFIG.other;
+  responseCache.set(cacheKey, {
+    data,
+    expiry: Date.now() + ttl
+  });
+}
 
 /**
  * Retrieve Square credentials
@@ -292,6 +339,13 @@ async function exchangeCodeForToken(code, code_verifier) {
  */
 async function getMerchantInfo(accessToken) {
   try {
+    // Check cache first
+    const cacheKey = `merchant-info-${accessToken}`;
+    const cachedData = getCachedResponse(cacheKey, 'merchantInfo');
+    if (cachedData) {
+      return cachedData;
+    }
+    
     const client = getSquareClient(accessToken);
     
     console.log('Getting merchant info with Square v42 SDK');
@@ -363,7 +417,7 @@ async function getMerchantInfo(accessToken) {
     console.log('Successfully retrieved merchant info');
     
     // Format merchant information
-    return {
+    const merchantInfo = {
       id: response.result.merchant.id,
       businessName: response.result.merchant.businessName || response.result.merchant.business_name || response.result.merchant.businessEmail || response.result.merchant.business_email || 'Unknown',
       country: response.result.merchant.country,
@@ -371,6 +425,11 @@ async function getMerchantInfo(accessToken) {
       currency: response.result.merchant.currency,
       status: response.result.merchant.status
     };
+    
+    // Cache the result
+    cacheResponse(cacheKey, merchantInfo, 'merchantInfo');
+    
+    return merchantInfo;
   } catch (error) {
     // Enhance error with better details for authentication failures
     if (error.statusCode === 401 || error.message.includes('Unauthorized')) {
@@ -393,9 +452,8 @@ async function verifyWebhookSignature(signature, requestBody) {
   try {
     console.log('Verifying webhook signature');
     
-    // Get webhook signature key from credentials
-    const credentials = await getSquareCredentials();
-    const signatureKey = credentials.webhookSignatureKey;
+    // Get webhook signature key from cached helper
+    const signatureKey = await squareApiHelpers.getWebhookSignatureKey(getSquareCredentials);
     
     if (!signatureKey) {
       console.error('No webhook signature key found in credentials');
@@ -603,15 +661,19 @@ async function refreshAccessToken(refreshToken) {
 
 // Export functions
 module.exports = {
+  getSquareClient,
   generateOAuthUrl,
   exchangeCodeForToken,
+  getSquareCredentials,
   getMerchantInfo,
-  getSquareClient,
   generateStateParam,
   generateCodeVerifier,
   generateCodeChallenge,
-  getSquareCredentials,
-  executeSquareRequest,
   verifyWebhookSignature,
-  refreshAccessToken
+  executeSquareRequest,
+  refreshAccessToken,
+  // Add new cache utility exports
+  getCachedResponse,
+  cacheResponse,
+  CACHE_TTL_CONFIG
 };

@@ -16,6 +16,11 @@ const DEFAULT_RETRY_CONFIG = {
   statusCodesToRetry: [429, 500, 503] // Square API status codes to retry
 };
 
+// Cache for webhook signature key to avoid repeated retrieval
+let webhookSignatureKey = null;
+let webhookSignatureKeyExpiryTime = 0;
+const WEBHOOK_SIG_KEY_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
 /**
  * Execute a Square API request with automatic retries and exponential backoff
  * 
@@ -265,15 +270,52 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Get the webhook signature key from cache or retrieve it
+ * This optimizes the webhook verification process by caching the key
+ * 
+ * @param {Function} getCredentialsFn - Function to get credentials when needed
+ * @returns {Promise<string>} - The webhook signature key
+ */
+async function getWebhookSignatureKey(getCredentialsFn) {
+  const now = Date.now();
+  
+  // Return from cache if still valid
+  if (webhookSignatureKey && now < webhookSignatureKeyExpiryTime) {
+    return webhookSignatureKey;
+  }
+  
+  // Get fresh credentials
+  try {
+    const credentials = await getCredentialsFn();
+    
+    // Cache the signature key if present
+    if (credentials && credentials.webhookSignatureKey) {
+      webhookSignatureKey = credentials.webhookSignatureKey;
+      webhookSignatureKeyExpiryTime = now + WEBHOOK_SIG_KEY_TTL;
+      console.log('Cached webhook signature key for 24 hours');
+    } else {
+      console.warn('No webhook signature key found in credentials');
+      webhookSignatureKey = null;
+    }
+    
+    return webhookSignatureKey;
+  } catch (error) {
+    console.error('Error retrieving webhook signature key:', error);
+    return null;
+  }
+}
+
 // Initialize rate limiting configuration
 configureRateLimits();
 
 module.exports = {
   executeWithRetry,
+  configureRateLimits,
   shouldRetryRequest,
   calculateBackoff,
   enhanceError,
   logApiError,
-  DEFAULT_RETRY_CONFIG,
-  configureRateLimits
+  sleep,
+  getWebhookSignatureKey
 }; 

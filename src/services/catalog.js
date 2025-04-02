@@ -23,6 +23,25 @@ async function listCatalogItems(accessToken, options = {}) {
     console.log('=== REQUEST BOUNDARY: listCatalogItems START ===');
     console.log('Listing catalog items from Square with options:', JSON.stringify(options, null, 2));
     
+    // Determine cache key based on options
+    const optionsHash = JSON.stringify({
+      types: options.types || ['ITEM', 'CATEGORY'],
+      limit: options.limit || 100,
+      cursor: options.cursor || null,
+      includeRelatedObjects: options.includeRelatedObjects === true || options.includeRelatedObjects === 'true',
+      includeDeletedObjects: options.includeDeletedObjects === true || options.includeDeletedObjects === 'true'
+    });
+    
+    const cacheKey = `catalog-items-${accessToken}-${Buffer.from(optionsHash).toString('base64')}`;
+    
+    // Check cache first
+    const cachedData = squareService.getCachedResponse(cacheKey, 'catalogItems');
+    if (cachedData) {
+      console.log('Using cached catalog items data');
+      console.log('=== REQUEST BOUNDARY: listCatalogItems END (Cached) ===');
+      return cachedData;
+    }
+    
     // Use executeSquareRequest to handle retries and errors
     const result = await squareService.executeSquareRequest(
       async (client) => {
@@ -63,12 +82,17 @@ async function listCatalogItems(accessToken, options = {}) {
       cursor: result.result.cursor ? 'Present' : 'None'
     });
     
-    return {
+    const response = {
       success: true,
       objects: result.result.objects || [],
       cursor: result.result.cursor,
       types: options.types || ['ITEM', 'CATEGORY']
     };
+    
+    // Cache the result
+    squareService.cacheResponse(cacheKey, response, 'catalogItems');
+    
+    return response;
   } catch (error) {
     console.error('Error listing catalog items:', error);
     return squareErrorHandler.handleSquareError(error, 'Failed to list catalog items');
@@ -579,25 +603,61 @@ async function batchUpsertCatalogObjects(accessToken, batches) {
 /**
  * Batch delete catalog objects
  * @param {string} accessToken - Square access token
- * @param {string[]} objectIds - Array of catalog object IDs
- * @returns {Promise<Object>} Deletion results
+ * @param {Array<string>} objectIds - Array of catalog object IDs to delete
+ * @returns {Promise<Object>} Delete response
  */
 async function batchDeleteCatalogObjects(accessToken, objectIds) {
   try {
-    console.log('Batch deleting catalog objects');
+    if (!objectIds || !Array.isArray(objectIds) || objectIds.length === 0) {
+      return {
+        success: false,
+        error: 'No catalog object IDs provided for deletion'
+      };
+    }
+    
+    console.log(`Batch deleting ${objectIds.length} catalog objects`);
     const client = getSquareClient(accessToken);
     const catalogApi = client.catalog;
     
-    const response = await catalogApi.batchDeleteCatalogObjects({
-      objectIds
-    });
+    // Square API requires a BatchDeleteCatalogObjectsRequest object
+    const request = {
+      objectIds: objectIds
+    };
     
-    // Remove from our database
+    const response = await squareService.executeSquareRequest(
+      async (client) => client.catalog.batchDeleteCatalogObjects(request),
+      accessToken,
+      'catalog-api'
+    );
+    
+    console.log('Successfully deleted catalog objects');
+    console.log('Deleted IDs count:', response.result.deletedObjectIds ? response.result.deletedObjectIds.length : 0);
+    
+    // Remove from our database - Fix N+1 pattern by using batch operation
     try {
-      for (const objectId of objectIds) {
-        const localItem = await CatalogItem.findBySquareCatalogId(objectId);
-        if (localItem) {
-          await CatalogItem.remove(localItem.id);
+      // Get references to all objects in a single query
+      const localItemPromises = objectIds.map(objectId => 
+        CatalogItem.findBySquareCatalogId(objectId)
+      );
+      
+      const localItems = await Promise.all(localItemPromises);
+      const validLocalItems = localItems.filter(item => item !== null);
+      
+      if (validLocalItems.length > 0) {
+        // For better performance, use a batch delete operation if available
+        console.log(`Found ${validLocalItems.length} local items to remove`);
+        
+        // If your DB has batch remove capability
+        if (typeof CatalogItem.batchRemove === 'function') {
+          const itemIds = validLocalItems.map(item => item.id);
+          await CatalogItem.batchRemove(itemIds);
+          console.log(`Batch removed ${itemIds.length} catalog item references`);
+        } else {
+          // Fall back to parallel deletion if batch not available
+          await Promise.all(validLocalItems.map(item => 
+            CatalogItem.remove(item.id)
+          ));
+          console.log(`Removed ${validLocalItems.length} catalog item references in parallel`);
         }
       }
     } catch (dbError) {
@@ -606,8 +666,7 @@ async function batchDeleteCatalogObjects(accessToken, objectIds) {
     
     return {
       success: true,
-      deletedObjectIds: response.result.deletedObjectIds || [],
-      deletedAt: response.result.deletedAt
+      deletedObjectIds: response.result.deletedObjectIds || []
     };
   } catch (error) {
     console.error('Error batch deleting catalog objects:', error);
@@ -683,6 +742,15 @@ async function updateItemTaxes(accessToken, itemId, taxesToEnable = [], taxesToD
 async function getCatalogCategories(accessToken) {
   try {
     console.log('=== REQUEST BOUNDARY: getCatalogCategories START ===');
+    
+    // Check cache first
+    const cacheKey = `catalog-categories-${accessToken}`;
+    const cachedData = squareService.getCachedResponse(cacheKey, 'catalogCategories');
+    if (cachedData) {
+      console.log('Using cached catalog categories data');
+      return cachedData;
+    }
+    
     console.log('Getting catalog categories from Square');
     
     // Use direct axios approach to ensure proper query formatting
@@ -765,23 +833,34 @@ async function getCatalogCategories(accessToken) {
       console.log('Fallback objects found:', fallbackResponse.data.objects ? fallbackResponse.data.objects.length : 0);
       
       console.log('=== REQUEST BOUNDARY: getCatalogCategories END (Success) ===');
-      return {
+      
+      const result = {
         success: true,
         categories: fallbackResponse.data.objects || [],
         relatedObjects: fallbackResponse.data.related_objects || [],
         cursor: fallbackResponse.data.cursor
       };
+      
+      // Cache the result
+      squareService.cacheResponse(cacheKey, result, 'catalogCategories');
+      
+      return result;
     }
     
     console.log('=== REQUEST BOUNDARY: getCatalogCategories END (Success) ===');
     
     // Process the response data
-    return {
+    const result = {
       success: true,
       categories: response.data.objects || [],
       relatedObjects: response.data.related_objects || [],
       cursor: response.data.cursor
     };
+    
+    // Cache the result
+    squareService.cacheResponse(cacheKey, result, 'catalogCategories');
+    
+    return result;
   } catch (error) {
     console.error('=== REQUEST BOUNDARY: getCatalogCategories END (Error) ===');
     console.error('Error getting catalog categories:', error.response ? error.response.data : error);
