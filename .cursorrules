@@ -15,3 +15,11 @@ your lack of thoroughness is costing me a lot of valuable time. your assumptions
 We should be using Square's SDK v42
 
 we should be using node.js v22 @https://auth0.com/docs/troubleshoot/product-lifecycle/deprecations-and-migrations/migrate-nodejs-22 
+
+Serverless framework versions https://github.com/serverless/serverless/releases 
+
+Node.js >=22.0.0 in engines
+Serverless v4.10.1
+Latest serverless plugins (serverless-webpack v5.15.1, serverless-offline v14.4.0, serverless-dotenv-plugin v6.0.0)
+Latest AWS SDK v3 packages
+Square SDK v42.0.0
