@@ -51,6 +51,8 @@ custom:
     square: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-square-production:1
 
 frameworkVersion: '4'
+build:
+  esbuild: false
 
 provider:
   name: aws
@@ -72,8 +74,6 @@ provider:
     STATES_TABLE: ${self:custom.statesTableName}
     SQUARE_CREDENTIALS_SECRET: square-credentials-production
     LOG_LEVEL: debug
-  build:
-    esbuild: false
   iam:
     role:
       statements:

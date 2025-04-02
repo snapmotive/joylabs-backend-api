@@ -1,14 +1,14 @@
 service: joylabs-backend-api-v3-layers
 
 frameworkVersion: '4'
+build:
+  esbuild: false
 
 provider:
   name: aws
   runtime: nodejs22.x
   region: us-west-1
   stage: ${opt:stage, 'production'}
-  build:
-    esbuild: false
   
 layers:
   core:
