@@ -11,6 +11,14 @@ const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { SquareClient } = require('square');
 
+/**
+ * IMPORTANT: This is the primary implementation of the Square OAuth flow.
+ * The duplicate implementation in oauthHandlers.js is maintained for backward 
+ * compatibility but will be removed in a future version.
+ * 
+ * All new OAuth functionality should be added here rather than in oauthHandlers.js.
+ */
+
 // Create a temporary memory store for code verifiers
 // Note: In production, consider using a database or Redis for persistence across instances
 if (!global.codeVerifierStore) {

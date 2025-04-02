@@ -83,15 +83,11 @@ const authenticate = async (req, res, next) => {
   try {
     console.log('Authenticating request for', req.path);
     
-    // Get the authorization header
+    // Get the authorization header - use lowercase consistently for Node.js 22 compatibility
+    // Headers in Node.js 22 are normalized to lowercase
     let authHeader = req.headers.authorization;
     
-    // Check for header in different case
-    if (!authHeader && req.headers.Authorization) {
-      authHeader = req.headers.Authorization;
-    }
-    
-    // Check for header in legacy frameworks
+    // Check for header using request.get() method for Express compatibility
     if (!authHeader && req.get) {
       authHeader = req.get('Authorization');
     }

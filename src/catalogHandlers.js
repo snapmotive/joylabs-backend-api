@@ -337,17 +337,25 @@ const authenticateRequest = async (event) => {
     // Get the authorization header, accounting for different event structures
     let authHeader;
     
-    // Check if the event has headers directly (Lambda direct invocation)
+    // In Node.js 22, header names are normalized to lowercase
+    // Check for authorization header using lowercase consistently
     if (event.headers && event.headers.authorization) {
       authHeader = event.headers.authorization;
     } 
-    // Check if the headers have Authorization with capital A (API Gateway)
+    // For backwards compatibility, still check Authorization with capital A
+    // but standardize on the lowercase version moving forward
     else if (event.headers && event.headers.Authorization) {
+      // This branch is for compatibility with older code, prefer lowercase
       authHeader = event.headers.Authorization;
     }
     // Check multiValueHeaders from API Gateway v1
-    else if (event.multiValueHeaders && (event.multiValueHeaders.authorization || event.multiValueHeaders.Authorization)) {
-      authHeader = (event.multiValueHeaders.authorization || event.multiValueHeaders.Authorization)[0];
+    else if (event.multiValueHeaders) {
+      if (event.multiValueHeaders.authorization && event.multiValueHeaders.authorization[0]) {
+        authHeader = event.multiValueHeaders.authorization[0];
+      } else if (event.multiValueHeaders.Authorization && event.multiValueHeaders.Authorization[0]) {
+        // For backwards compatibility
+        authHeader = event.multiValueHeaders.Authorization[0];
+      }
     }
     
     console.log('Auth header found:', !!authHeader);
