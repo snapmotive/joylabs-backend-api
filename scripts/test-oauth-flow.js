@@ -156,9 +156,9 @@ const squareService = {
     // Simulate a successful merchant response
     return {
       id: 'TEST_' + Math.random().toString(36).substring(2, 10),
-      business_name: 'Test Production Merchant',
+      businessName: 'Test Production Merchant',
       country: 'US',
-      language_code: 'en-US',
+      language: 'en-US',
       currency: 'USD',
       status: 'ACTIVE',
       main_location_id: 'test-location-' + Math.random().toString(36).substring(2, 10)
@@ -336,7 +336,7 @@ async function testOAuthFlow() {
     if (!user) {
       console.log('\n5a. Testing user creation...');
       user = await User.create({
-        name: merchantInfo.business_name,
+        name: merchantInfo.businessName,
         email: `merchant-${merchantInfo.id}@example.com`,
         square_merchant_id: merchantInfo.id,
         square_access_token: tokenResponse.access_token,

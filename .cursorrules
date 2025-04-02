@@ -11,3 +11,7 @@ ONLY use AWS SDK v3. DO NOT use v2.x
 DO NOT Commit or push to git or github unless user asks or initiates the request.
 
 your lack of thoroughness is costing me a lot of valuable time. your assumptions that other parts of the codebase is correct is harming our developmental efforts. i need you to check every instance that relies on your changes and implementations before you just tell me you've fixed something. test and double check yourself!
+
+We should be using Square's SDK v42
+
+we should be using node.js v22 @https://auth0.com/docs/troubleshoot/product-lifecycle/deprecations-and-migrations/migrate-nodejs-22 
