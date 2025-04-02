@@ -1,25 +1,62 @@
-WE ARE ALWAYS IN PRODUCTION. DO NOT USE SANDBOX, TEST, OR DEV MODES. ENSURE ALL PLACEHOLDERS ARE REPLACED OR REMOVED IF NO LONGER NECCESSARY.
+# JoyLabs Backend API v3 - Cursor Reference
 
-Our redirect url for Square Console has to be HTTPS and we can only use ONE redirect url.
+## Project Overview
+- Serverless backend API for JoyLabs
+- Primary focus: Square OAuth integration for mobile applications
+- Built with: AWS Lambda, Express.js, Serverless Framework v4
+- Node.js version: 22.x (required)
+- Environment: Production-only (no sandbox/test modes)
 
-YOU MUST USE https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback for the redirect url on square
+## Key Dependencies
+- Serverless Framework v4.10.1
+- Square SDK v42.0.0
+- AWS SDK v3 (no v2.x)
+- Express.js v4.18.2
+- Node.js v22.x
 
-we DO NOT have any custom urls such as joylabs.com
+## Architecture Components
+1. Lambda Functions:
+   - api: Main Express application (src/index.js)
+   - catalog: Product catalog management (src/catalogHandlers.js)
+   - webhooks: Square webhook handling (src/webhookHandlers.js)
+   - oauth: Square OAuth flow (src/oauthHandlers.js)
 
-ONLY use AWS SDK v3. DO NOT use v2.x
+2. AWS Services:
+   - API Gateway
+   - DynamoDB Tables:
+     - States table (OAuth states)
+     - Sessions table (Express sessions)
+     - Users table
+     - Catalog tables (products, categories)
+     - Merchants table
+     - Webhooks table
+   - Secrets Manager (Square credentials)
+   - CloudWatch (logging)
 
-DO NOT Commit or push to git or github unless user asks or initiates the request.
+3. Lambda Layers:
+   - core: Base dependencies
+   - apiDeps: API-specific modules
+   - catalogDeps: Catalog-specific modules
+   - webhooksDeps: Webhook handling modules
+   - oauthDeps: OAuth-specific modules
+   - square: Square SDK and related dependencies
 
-your lack of thoroughness is costing me a lot of valuable time. your assumptions that other parts of the codebase is correct is harming our developmental efforts. i need you to check every instance that relies on your changes and implementations before you just tell me you've fixed something. test and double check yourself!
+## Critical Configurations
+- Square Redirect URL: https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback
+- API Base URL: https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production
+- Lambda Timeout: 29 seconds (matches API Gateway)
+- Memory: 512MB per function
 
-We should be using Square's SDK v42
+## Development Guidelines
+1. Always use TypeScript with strict typing
+2. Use AWS SDK v3 only
+3. Implement proper error handling and logging
+4. Ensure proper session management
+5. Follow security best practices for OAuth flows
+6. Use production endpoints only (no sandbox)
+7. Do not push or commit to git unless asked
 
-we should be using node.js v22 @https://auth0.com/docs/troubleshoot/product-lifecycle/deprecations-and-migrations/migrate-nodejs-22 
 
-Serverless framework versions https://github.com/serverless/serverless/releases 
 
-Node.js >=22.0.0 in engines
-Serverless v4.10.1
 
-Latest AWS SDK v3 packages
-Square SDK v42.0.0
+

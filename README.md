@@ -1,14 +1,22 @@
 # JoyLabs Backend API v3
 
-This repository contains the JoyLabs backend API v3, built with Serverless Framework, AWS Lambda, Express, and DynamoDB.
+This repository contains the JoyLabs backend API v3, built with Serverless Framework v4, AWS Lambda, Express, and DynamoDB.
 
 ## System Requirements
 
-- Node.js v22 or later
+- Node.js v22.x (required for AWS Lambda Node.js 22.x runtime)
 - AWS CLI configured with appropriate credentials
-- Serverless Framework v3
+- Serverless Framework v4.10.1 or later
 
-> Note: This project now requires Node.js v22 for compatibility with AWS Lambda's Node.js 22.x runtime. Earlier versions are no longer supported.
+> **Important Update**: This project now requires Node.js 22.x and Serverless Framework v4. Earlier versions are no longer supported.
+
+## New Features & Improvements
+
+- Native environment variable support with Serverless Framework v4
+- Enhanced session management with DynamoDB
+- Improved Square SDK v42 integration
+- AWS SDK v3 for better performance and TypeScript support
+- Optimized Lambda cold starts with layer-based architecture
 
 ## Layer-Based Architecture
 
@@ -25,20 +33,42 @@ This project uses AWS Lambda Layers to optimize deployment size and improve main
 
 ### Prerequisites
 
-- Node.js 18 or later
-- AWS CLI configured with appropriate credentials
-- Serverless Framework installed globally: `npm install -g serverless`
+1. Install Node.js 22.x:
+
+   ```bash
+   # Using nvm (recommended)
+   nvm install 22
+   nvm use 22
+   ```
+
+2. Install Serverless Framework v4:
+
+   ```bash
+   npm install -g serverless@4.10.1
+   ```
+
+3. Configure AWS CLI with appropriate credentials
 
 ### Installation
 
 1. Clone the repository
 2. Install dependencies:
-   ```
-   npm install
+   ```bash
+   npm install --legacy-peer-deps
    ```
 3. Install layer dependencies:
-   ```
+   ```bash
    npm run install-layers
+   ```
+
+### Environment Setup
+
+1. Create a `.env.production` file with required environment variables:
+   ```
+   NODE_ENV=production
+   API_BASE_URL=https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production
+   SQUARE_APPLICATION_ID=your_square_app_id
+   SESSION_SECRET=your_session_secret
    ```
 
 ### Local Development
@@ -75,7 +105,7 @@ To deploy a specific function:
 
 ```
 npm run deploy:function:api     # Deploy API function
-npm run deploy:function:catalog # Deploy Catalog function 
+npm run deploy:function:catalog # Deploy Catalog function
 npm run deploy:function:webhooks # Deploy Webhooks function
 npm run deploy:function:oauth    # Deploy OAuth function
 ```
@@ -99,6 +129,7 @@ npm run create:layer <layer-name>
 ```
 
 Example:
+
 ```
 npm run create:layer analytics
 ```
@@ -183,12 +214,14 @@ The Lambda functions use two dependency layers to reduce cold start times and pa
 Three primary Lambda functions:
 
 1. **api**: Main API service handling general endpoints
+
    - Handler: `src/index.handler`
    - Environment: `production`
    - Memory: 512 MB
    - Timeout: 30 seconds
 
 2. **oauth**: Specialized function for OAuth processes
+
    - Handler: `src/oauthHandlers.handler`
    - Environment: `production`
    - Memory: 512 MB
@@ -213,14 +246,14 @@ Each Lambda function requires these permissions:
     - dynamodb:PutItem
     - dynamodb:UpdateItem
     - dynamodb:DeleteItem
-  Resource: 
+  Resource:
     - !GetAtt StatesTable.Arn
 
 - Effect: Allow
   Action:
     - secretsmanager:GetSecretValue
-  Resource: 
-    - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:square-credentials-*"
+  Resource:
+    - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:square-credentials-*'
 ```
 
 ### DynamoDB Tables
@@ -283,19 +316,23 @@ The system implements the OAuth 2.0 PKCE (Proof Key for Code Exchange) flow for 
 ### Flow Steps
 
 1. **State Registration** (`/api/auth/register-state`)
+
    - Mobile app generates state and code_verifier
    - App sends state, code_verifier, and redirectUrl to backend
    - Backend stores these in DynamoDB with a 10-minute TTL
 
 2. **OAuth URL Generation** (`/api/auth/connect/url`)
+
    - Backend generates the Square authorization URL with state and code_challenge
    - URL is returned to the mobile app
 
 3. **Authorization**
+
    - User is redirected to Square for authorization using the generated URL
    - After authorization, Square redirects to the callback URL with code and state
 
 4. **Callback Handling** (`/api/auth/square/callback`)
+
    - Backend receives code and state from Square
    - Retrieves state data from DynamoDB to verify state and get code_verifier
    - Exchanges code for access tokens using code_verifier
@@ -312,14 +349,17 @@ The system implements the OAuth 2.0 PKCE (Proof Key for Code Exchange) flow for 
 For security, we use PKCE flow which is critical for mobile apps:
 
 1. **Code Verifier**: A cryptographically random string generated on the mobile app
+
    - 43-128 characters long
    - URL-safe characters only (A-Z, a-z, 0-9, hyphen, period, underscore, tilde)
 
 2. **Code Challenge**: Derived from the code verifier
+
    - SHA-256 hash of the code verifier
    - Base64 URL encoded
 
 3. **State Parameter**: Another random string to prevent CSRF attacks
+
    - Stored with code verifier in DynamoDB
    - Validated during callback
 
@@ -332,6 +372,7 @@ For security, we use PKCE flow which is critical for mobile apps:
 The mobile app needs to implement the following:
 
 1. **Generate State and Code Verifier**:
+
    ```javascript
    function generateCodeVerifier() {
      const array = new Uint8Array(32);
@@ -347,30 +388,37 @@ The mobile app needs to implement the following:
    ```
 
 2. **Compute Code Challenge**:
+
    ```javascript
    async function generateCodeChallenge(codeVerifier) {
-     const hash = await crypto.subtle.digest('SHA-256', 
-       new TextEncoder().encode(codeVerifier));
+     const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
      return base64UrlEncode(new Uint8Array(hash));
    }
    ```
 
 3. **Register State**:
+
    ```javascript
-   await fetch('https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/register-state', {
-     method: 'POST',
-     headers: { 'Content-Type': 'application/json' },
-     body: JSON.stringify({
-       state: state,
-       code_verifier: codeVerifier,
-       redirectUrl: 'joylabs://square-callback'
-     })
-   });
+   await fetch(
+     'https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/register-state',
+     {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({
+         state: state,
+         code_verifier: codeVerifier,
+         redirectUrl: 'joylabs://square-callback',
+       }),
+     }
+   );
    ```
 
 4. **Get Authorization URL**:
+
    ```javascript
-   const response = await fetch(`https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/connect/url?state=${state}&code_challenge=${codeChallenge}&redirect_uri=joylabs://square-callback`);
+   const response = await fetch(
+     `https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/connect/url?state=${state}&code_challenge=${codeChallenge}&redirect_uri=joylabs://square-callback`
+   );
    const { url } = await response.json();
    // Open URL in browser/WebView
    ```
@@ -384,7 +432,7 @@ The mobile app needs to implement the following:
        const refreshToken = params.get('refresh_token');
        const merchantId = params.get('merchant_id');
        const businessName = params.get('business_name');
-       
+
        // Store tokens securely
        // Update app state for authenticated user
      }
@@ -396,6 +444,7 @@ The mobile app needs to implement the following:
 ### Logging
 
 All Lambda functions log to CloudWatch with structured logging:
+
 - Request details
 - State registration
 - Token exchange
@@ -403,6 +452,7 @@ All Lambda functions log to CloudWatch with structured logging:
 - Redirect URL construction
 
 Example log query for tracing an OAuth flow:
+
 ```
 filter @message like "Square callback received"
 | sort @timestamp desc
@@ -412,14 +462,17 @@ filter @message like "Square callback received"
 ### Common Issues
 
 1. **Invalid State Parameter**
+
    - Cause: State not registered or expired in DynamoDB
    - Solution: Ensure state is registered before starting OAuth flow
 
 2. **Missing Code Verifier**
+
    - Cause: Code verifier not stored with state
    - Solution: Include code_verifier when registering state
 
 3. **URL Scheme Handling**
+
    - Cause: Mobile app not correctly configured for deep linking
    - Solution: Ensure proper configuration in `Info.plist` (iOS) or `AndroidManifest.xml` (Android)
 
@@ -433,9 +486,9 @@ For support or questions, contact support@joylabs.com
 
 ---
 
-*This documentation is maintained by the JoyLabs Backend Team*
+_This documentation is maintained by the JoyLabs Backend Team_
 
 ## Recent Updates
 
 - **Node.js 22 Migration**: The codebase has been updated to run on Node.js 22. See [Node.js 22 Migration Guide](docs/nodejs22-migration.md) for details.
-- **Square SDK v42**: Updated from v35.1.0 to v42.0.0. API property access patterns have been updated across the codebase. 
+- **Square SDK v42**: Updated from v35.1.0 to v42.0.0. API property access patterns have been updated across the codebase.
