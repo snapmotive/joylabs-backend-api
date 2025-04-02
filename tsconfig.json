@@ -28,6 +28,6 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "tests/**/*"],
-  "exclude": ["node_modules", ".serverless", ".build", "dist"]
+  "include": ["src/**/*", "tests/**/*", "scripts/**/*", "test/**/*", "webpack.config.js"],
+  "exclude": ["node_modules", ".serverless", ".build", "dist", "unused-firebase-files"]
 }

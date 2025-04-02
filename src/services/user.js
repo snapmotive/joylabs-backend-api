@@ -1,24 +1,41 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+  ScanCommand,
+  DeleteCommand,
+} = require('@aws-sdk/lib-dynamodb');
 
-// Configure AWS DynamoDB client
-const client = new DynamoDBClient({
-  maxAttempts: 3,
-  requestTimeout: 3000,
-  region: process.env.AWS_REGION
-});
+// Cache the client for reuse between functions
+let dynamoClient = null;
+let docClient = null;
 
-const dynamoDb = DynamoDBDocumentClient.from(client);
+/**
+ * Get DynamoDB Document Client
+ * @returns {DynamoDBDocumentClient} The document client
+ */
+function getDynamoDb() {
+  if (!dynamoClient) {
+    dynamoClient = new DynamoDBClient();
+    docClient = DynamoDBDocumentClient.from(dynamoClient);
+  }
+  return docClient;
+}
+
+// Table name from environment variable
+const USERS_TABLE = process.env.USERS_TABLE || 'joylabs-users-production';
 
 // Get table name
-const getTableName = (baseName) => {
+const getTableName = baseName => {
   return `${baseName}-v3-production`;
 };
 
 /**
  * Get a merchant by ID
  */
-exports.getMerchantById = async (merchantId) => {
+exports.getMerchantById = async merchantId => {
   if (!merchantId) {
     throw new Error('Merchant ID is required');
   }
@@ -26,12 +43,12 @@ exports.getMerchantById = async (merchantId) => {
   const params = {
     TableName: getTableName('joylabs-merchants'),
     Key: {
-      id: merchantId
-    }
+      id: merchantId,
+    },
   };
 
   try {
-    const result = await dynamoDb.send(new GetCommand(params));
+    const result = await getDynamoDb().send(new GetCommand(params));
     return result.Item;
   } catch (error) {
     console.error(`Error getting merchant ${merchantId}:`, error);
@@ -49,7 +66,7 @@ exports.createMerchant = async (merchantId, accessToken, refreshToken, expiresAt
 
   const dynamoDb = getDynamoDb();
   const now = new Date().toISOString();
-  const ttl = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60); // 1 year TTL
+  const ttl = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60; // 1 year TTL
 
   const item = {
     id: merchantId,
@@ -58,13 +75,13 @@ exports.createMerchant = async (merchantId, accessToken, refreshToken, expiresAt
     expiresAt,
     createdAt: now,
     updatedAt: now,
-    ttl
+    ttl,
   };
 
   const params = {
     TableName: getTableName('joylabs-merchants'),
     Item: item,
-    ConditionExpression: 'attribute_not_exists(id)'
+    ConditionExpression: 'attribute_not_exists(id)',
   };
 
   try {
@@ -89,22 +106,23 @@ exports.updateMerchantTokens = async (merchantId, accessToken, refreshToken, exp
 
   const dynamoDb = getDynamoDb();
   const now = new Date().toISOString();
-  const ttl = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60); // 1 year TTL
+  const ttl = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60; // 1 year TTL
 
   const params = {
     TableName: getTableName('joylabs-merchants'),
     Key: {
-      id: merchantId
+      id: merchantId,
     },
-    UpdateExpression: 'SET accessToken = :accessToken, refreshToken = :refreshToken, expiresAt = :expiresAt, updatedAt = :updatedAt, ttl = :ttl',
+    UpdateExpression:
+      'SET accessToken = :accessToken, refreshToken = :refreshToken, expiresAt = :expiresAt, updatedAt = :updatedAt, ttl = :ttl',
     ExpressionAttributeValues: {
       ':accessToken': accessToken,
       ':refreshToken': refreshToken,
       ':expiresAt': expiresAt,
       ':updatedAt': now,
-      ':ttl': ttl
+      ':ttl': ttl,
     },
-    ReturnValues: 'ALL_NEW'
+    ReturnValues: 'ALL_NEW',
   };
 
   try {
@@ -123,7 +141,7 @@ exports.listMerchants = async (limit = 100) => {
   const dynamoDb = getDynamoDb();
   const params = {
     TableName: getTableName('joylabs-merchants'),
-    Limit: limit
+    Limit: limit,
   };
 
   try {
@@ -138,7 +156,7 @@ exports.listMerchants = async (limit = 100) => {
 /**
  * Delete a merchant by ID
  */
-exports.deleteMerchant = async (merchantId) => {
+exports.deleteMerchant = async merchantId => {
   if (!merchantId) {
     throw new Error('Merchant ID is required');
   }
@@ -147,8 +165,8 @@ exports.deleteMerchant = async (merchantId) => {
   const params = {
     TableName: getTableName('joylabs-merchants'),
     Key: {
-      id: merchantId
-    }
+      id: merchantId,
+    },
   };
 
   try {
@@ -158,4 +176,4 @@ exports.deleteMerchant = async (merchantId) => {
     console.error(`Error deleting merchant ${merchantId}:`, error);
     throw error;
   }
-}; 
+};
