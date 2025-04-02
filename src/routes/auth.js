@@ -289,8 +289,19 @@ router.get('/square/callback', async (req, res) => {
           await docClient.send(new UpdateCommand(updateParams));
           console.log('Marked state as used in DynamoDB');
 
-          // Get merchant info using the access token
-          const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+          // Get merchant info using the access token - try native fetch first for better security
+          let merchantInfo;
+          try {
+            // Use native fetch implementation first (Node.js 22 feature)
+            merchantInfo = await squareService.getMerchantInfoWithFetch(tokenResponse.access_token);
+            console.log('Retrieved merchant info using native fetch API');
+          } catch (fetchError) {
+            // Fall back to SDK implementation if fetch fails
+            console.warn('Fetch API failed for merchant info, falling back to SDK:', fetchError.message);
+            merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+            console.log('Retrieved merchant info using Square SDK');
+          }
+          
           console.log('Retrieved merchant info');
 
           // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
@@ -340,8 +351,19 @@ router.get('/square/callback', async (req, res) => {
         await docClient.send(new UpdateCommand(updateParams));
         console.log('Marked state as used in DynamoDB');
 
-        // Get merchant info using the access token
-        const merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+        // Get merchant info using the access token - try native fetch first for better security
+        let merchantInfo;
+        try {
+          // Use native fetch implementation first (Node.js 22 feature)
+          merchantInfo = await squareService.getMerchantInfoWithFetch(tokenResponse.access_token);
+          console.log('Retrieved merchant info using native fetch API');
+        } catch (fetchError) {
+          // Fall back to SDK implementation if fetch fails
+          console.warn('Fetch API failed for merchant info, falling back to SDK:', fetchError.message);
+          merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
+          console.log('Retrieved merchant info using Square SDK');
+        }
+        
         console.log('Retrieved merchant info');
 
         // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
@@ -974,6 +996,32 @@ router.get('/connect/url', async (req, res) => {
     console.error('Error generating OAuth URL:', error);
     res.status(500).json({ 
       error: 'Failed to generate OAuth URL',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Generate PKCE code verifier and challenge for OAuth flow
+ * Uses secure WebCrypto API with fallback to legacy implementation
+ */
+router.post('/generate-pkce', async (req, res) => {
+  try {
+    // Generate PKCE code verifier
+    const codeVerifier = await squareService.generateCodeVerifier();
+    
+    // Generate code challenge from verifier
+    const codeChallenge = await squareService.generateCodeChallenge(codeVerifier);
+    
+    // Return both to the client
+    res.json({
+      code_verifier: codeVerifier,
+      code_challenge: codeChallenge
+    });
+  } catch (error) {
+    console.error('Error generating PKCE codes:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate PKCE codes',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

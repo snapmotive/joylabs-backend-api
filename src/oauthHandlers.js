@@ -35,6 +35,27 @@ const STATES_TABLE = process.env.STATES_TABLE;
 // In-memory store for state parameters
 const stateStore = new Map();
 
+/**
+ * Create an enhanced error with cause for better error tracking
+ * This utilizes the Node.js 22 Error Cause feature
+ * 
+ * @param {string} message - Human-readable error message
+ * @param {Error} cause - Original error that caused this error
+ * @param {Object} additionalProps - Additional properties to add to the error
+ * @returns {Error} Enhanced error object
+ */
+function createErrorWithCause(message, cause, additionalProps = {}) {
+  // Create error with cause (Node.js 22 feature)
+  const error = new Error(message, { cause });
+  
+  // Add additional properties
+  if (additionalProps) {
+    Object.assign(error, additionalProps);
+  }
+  
+  return error;
+}
+
 // Apply middlewares with special handling for Expo AuthSession
 app.use((req, res, next) => {
   // Log request details for debugging
@@ -555,15 +576,26 @@ exports.initializeSquareOAuth = async (event) => {
       stack: error.stack
     });
     
+    // Create enhanced error with cause for better tracking
+    const enhancedError = createErrorWithCause(
+      'Failed to initialize OAuth flow', 
+      error,
+      { 
+        code: error.code || 'OAUTH_INIT_ERROR',
+        statusCode: error.statusCode || 500
+      }
+    );
+    
     return {
-      statusCode: 500,
+      statusCode: enhancedError.statusCode || 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
       },
       body: JSON.stringify({
-        error: 'Failed to initialize OAuth flow',
-        message: error.message
+        error: enhancedError.message,
+        code: enhancedError.code,
+        details: process.env.NODE_ENV === 'production' ? undefined : error.message
       })
     };
   }

@@ -8,6 +8,9 @@ const crypto = require('crypto');
 const { SquareClient } = require('square');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 const squareApiHelpers = require('../utils/squareApiHelpers');
+const webCrypto = require('../utils/webCrypto');
+const fetchHelpers = require('../utils/fetchHelpers');
+const { createErrorWithCause } = require('../utils/errorHandling');
 
 // Initialize AWS clients
 const secretsManager = new SecretsManagerClient({ region: 'us-west-1' });
@@ -162,21 +165,30 @@ function generateStateParam() {
  * Generate a code verifier for PKCE
  * Must be between 43-128 chars, URL safe base64
  */
-function generateCodeVerifier() {
-  // Generate 32 bytes of random data (will result in 43 chars when base64url encoded)
-  const randomBytes = crypto.randomBytes(32);
-  return base64URLEncode(randomBytes);
+async function generateCodeVerifier() {
+  try {
+    // Try to use the modern WebCrypto API implementation
+    return await webCrypto.generateCodeVerifier();
+  } catch (error) {
+    // Fall back to legacy implementation if WebCrypto fails
+    console.warn('WebCrypto API failed, falling back to legacy implementation:', error.message);
+    return webCrypto.generateCodeVerifierLegacy();
+  }
 }
 
 /**
  * Generate a code challenge from a code verifier
  * Must be base64URL(SHA256(code_verifier))
  */
-function generateCodeChallenge(codeVerifier) {
-  const hash = crypto.createHash('sha256')
-    .update(codeVerifier)
-    .digest();
-  return base64URLEncode(hash);
+async function generateCodeChallenge(codeVerifier) {
+  try {
+    // Try to use the modern WebCrypto API implementation
+    return await webCrypto.generateCodeChallenge(codeVerifier);
+  } catch (error) {
+    // Fall back to legacy implementation if WebCrypto fails
+    console.warn('WebCrypto API failed, falling back to legacy implementation:', error.message);
+    return webCrypto.generateCodeChallengeLegacy(codeVerifier);
+  }
 }
 
 /**
@@ -184,10 +196,7 @@ function generateCodeChallenge(codeVerifier) {
  * Converts to base64 then makes it URL safe
  */
 function base64URLEncode(buffer) {
-  return buffer.toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  return webCrypto.base64URLEncodeLegacy(buffer);
 }
 
 /**
@@ -689,6 +698,99 @@ async function refreshAccessToken(refreshToken) {
   }
 }
 
+/**
+ * Get merchant info using native fetch API (Node.js 22)
+ * Modern alternative to axios that uses native fetch API
+ */
+async function getMerchantInfoWithFetch(accessToken) {
+  try {
+    // Check cache first
+    const cacheKey = `merchant-info-${accessToken}`;
+    const cachedData = getCachedResponse(cacheKey, 'merchantInfo');
+    if (cachedData) {
+      return cachedData;
+    }
+    
+    console.log('Getting merchant info with native fetch API');
+    
+    // Prepare headers with authorization
+    const headers = {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json',
+      'Square-Version': '2023-12-13' // Use latest Square API version
+    };
+    
+    // Fetch merchant data using native fetch API
+    const merchantData = await fetchHelpers.fetchJson(
+      'https://connect.squareup.com/v2/merchants/me',
+      { headers },
+      10000 // 10 second timeout
+    );
+    
+    // Extract relevant data
+    if (merchantData.merchant) {
+      const merchant = merchantData.merchant;
+      
+      // Get main location info
+      const locationResponse = await fetchHelpers.fetchJson(
+        'https://connect.squareup.com/v2/locations',
+        { headers },
+        10000
+      );
+      
+      let mainLocation = null;
+      if (locationResponse.locations && locationResponse.locations.length > 0) {
+        // Prefer the main location
+        mainLocation = locationResponse.locations.find(loc => loc.name === 'Default') || 
+                       locationResponse.locations[0];
+      }
+      
+      // Format the response
+      const result = {
+        merchantId: merchant.id,
+        businessName: merchant.business_name || 'Unknown Business',
+        country: merchant.country,
+        languageCode: merchant.language_code,
+        currency: merchant.currency,
+        status: merchant.status,
+        mainLocation: mainLocation ? {
+          id: mainLocation.id,
+          name: mainLocation.name,
+          address: mainLocation.address,
+          phoneNumber: mainLocation.phone_number,
+          businessEmail: mainLocation.business_email
+        } : null
+      };
+      
+      // Cache the result
+      cacheResponse(cacheKey, result, 'merchantInfo');
+      
+      return result;
+    } else {
+      throw createErrorWithCause(
+        'Invalid merchant data structure', 
+        new Error('Missing merchant data'),
+        { statusCode: 500 }
+      );
+    }
+  } catch (error) {
+    console.error('Error getting merchant info with fetch:', error);
+    
+    // Try falling back to SDK if fetch fails
+    if (error.code !== 'AUTHENTICATION_ERROR') {
+      try {
+        console.log('Falling back to Square SDK for merchant info');
+        return await getMerchantInfo(accessToken);
+      } catch (sdkError) {
+        // If SDK also fails, throw the original error
+        throw error;
+      }
+    }
+    
+    throw error;
+  }
+}
+
 // Export functions
 module.exports = {
   getSquareClient,
@@ -705,5 +807,6 @@ module.exports = {
   // Add new cache utility exports
   getCachedResponse,
   cacheResponse,
-  CACHE_TTL_CONFIG
+  CACHE_TTL_CONFIG,
+  getMerchantInfoWithFetch
 };

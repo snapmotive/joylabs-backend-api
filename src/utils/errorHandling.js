@@ -1,7 +1,29 @@
 /**
  * Error Handling Utilities
  * Standardized error handling for API requests
+ * Enhanced with Node.js 22 Error Cause support
  */
+
+/**
+ * Create an enhanced error with cause for better error tracking
+ * This utilizes the Node.js 22 Error Cause feature
+ * 
+ * @param {string} message - Human-readable error message
+ * @param {Error} cause - Original error that caused this error
+ * @param {Object} additionalProps - Additional properties to add to the error
+ * @returns {Error} Enhanced error object
+ */
+function createErrorWithCause(message, cause, additionalProps = {}) {
+  // Create error with cause (Node.js 22 feature)
+  const error = new Error(message, { cause });
+  
+  // Add additional properties
+  if (additionalProps) {
+    Object.assign(error, additionalProps);
+  }
+  
+  return error;
+}
 
 /**
  * Safe JSON serialization that handles BigInt values by converting them to strings
@@ -43,12 +65,17 @@ function safeSerialize(data) {
 
 /**
  * Handle Square API errors in a standardized way
+ * Enhanced with Error Cause for better error tracking
+ * 
  * @param {Object} error - Square API error object
  * @param {string} defaultMessage - Default error message
  * @returns {Object} Standardized error response
  */
 function handleSquareError(error, defaultMessage = 'An error occurred') {
   console.error('Square API Error:', error);
+  
+  // Extract cause if available (Node.js 22 feature)
+  const originalError = error.cause || error;
   
   // Default error response
   const errorResponse = {
@@ -61,36 +88,36 @@ function handleSquareError(error, defaultMessage = 'An error occurred') {
   };
   
   // Check if it's a SquareError from the SDK
-  if (error.name === 'SquareError') {
-    errorResponse.error.message = error.message;
-    errorResponse.error.code = error.code || 'SQUARE_SDK_ERROR';
-    errorResponse.error.details = error.errors || [];
-    if (error.statusCode) {
-      errorResponse.statusCode = error.statusCode;
+  if (originalError.name === 'SquareError') {
+    errorResponse.error.message = originalError.message;
+    errorResponse.error.code = originalError.code || 'SQUARE_SDK_ERROR';
+    errorResponse.error.details = originalError.errors || [];
+    if (originalError.statusCode) {
+      errorResponse.statusCode = originalError.statusCode;
     }
     return errorResponse;
   }
   
   // Check if it's a Square API error with errors array
-  if (error.errors && Array.isArray(error.errors)) {
-    errorResponse.error.details = error.errors.map(e => ({
+  if (originalError.errors && Array.isArray(originalError.errors)) {
+    errorResponse.error.details = originalError.errors.map(e => ({
       code: e.code || 'UNKNOWN_ERROR',
       detail: e.detail || e.message || 'Unknown error',
       field: e.field || null
     }));
     
     // Use the first error's message if available
-    if (error.errors[0]?.detail) {
-      errorResponse.error.message = error.errors[0].detail;
+    if (originalError.errors[0]?.detail) {
+      errorResponse.error.message = originalError.errors[0].detail;
     }
     
     // Use the first error's code if available
-    if (error.errors[0]?.code) {
-      errorResponse.error.code = error.errors[0].code;
+    if (originalError.errors[0]?.code) {
+      errorResponse.error.code = originalError.errors[0].code;
     }
-  } else if (error.response?.data?.errors) {
+  } else if (originalError.response?.data?.errors) {
     // Handle Axios-wrapped Square errors
-    const squareErrors = error.response.data.errors;
+    const squareErrors = originalError.response.data.errors;
     errorResponse.error.details = squareErrors.map(e => ({
       code: e.code || 'UNKNOWN_ERROR',
       detail: e.detail || e.message || 'Unknown error',
@@ -104,43 +131,43 @@ function handleSquareError(error, defaultMessage = 'An error occurred') {
     if (squareErrors[0]?.code) {
       errorResponse.error.code = squareErrors[0].code;
     }
-  } else if (error.details && Array.isArray(error.details)) {
+  } else if (originalError.details) {
     // Handle enhanced errors from our retry mechanism
-    errorResponse.error.details = error.details;
-    errorResponse.error.message = error.message;
-    errorResponse.error.code = error.code || 'UNKNOWN_ERROR';
-  } else if (error.message) {
+    errorResponse.error.details = originalError.details;
+    errorResponse.error.message = originalError.message;
+    errorResponse.error.code = originalError.code || 'UNKNOWN_ERROR';
+  } else if (originalError.message) {
     // Handle standard Error objects
-    errorResponse.error.message = error.message;
+    errorResponse.error.message = originalError.message;
     
     // Use the error code if available
-    if (error.code) {
-      errorResponse.error.code = error.code;
+    if (originalError.code) {
+      errorResponse.error.code = originalError.code;
     } else {
       // Otherwise infer from message
-      if (error.message.includes('Authentication') || error.message.includes('Unauthorized')) {
+      if (originalError.message.includes('Authentication') || originalError.message.includes('Unauthorized')) {
         errorResponse.error.code = 'AUTHENTICATION_ERROR';
-      } else if (error.message.includes('Rate limit')) {
+      } else if (originalError.message.includes('Rate limit')) {
         errorResponse.error.code = 'RATE_LIMIT_ERROR';
-      } else if (error.message.includes('Timeout')) {
+      } else if (originalError.message.includes('Timeout')) {
         errorResponse.error.code = 'TIMEOUT_ERROR';
-      } else if (error.message.includes('Network')) {
+      } else if (originalError.message.includes('Network')) {
         errorResponse.error.code = 'NETWORK_ERROR';
       }
     }
   }
 
   // Include retry information if available
-  if (error.retries !== undefined) {
-    errorResponse.error.retries = error.retries;
-    if (error.retries > 0) {
-      errorResponse.error.message += ` (after ${error.retries} retries)`;
+  if (originalError.retries !== undefined) {
+    errorResponse.error.retries = originalError.retries;
+    if (originalError.retries > 0) {
+      errorResponse.error.message += ` (after ${originalError.retries} retries)`;
     }
   }
 
   // Map HTTP status code to error code
-  if (error.statusCode || error.response?.status) {
-    const statusCode = error.statusCode || error.response?.status;
+  if (originalError.statusCode || originalError.response?.status) {
+    const statusCode = originalError.statusCode || originalError.response?.status;
     
     // Add status code to response
     errorResponse.statusCode = statusCode;
@@ -163,14 +190,14 @@ function handleSquareError(error, defaultMessage = 'An error occurred') {
         errorResponse.error.code = 'RATE_LIMIT_ERROR';
         errorResponse.error.message = 'Rate limit exceeded. Please try again later.';
         // Add retry-after if available
-        if (error.response?.headers?.['retry-after']) {
-          errorResponse.error.retryAfter = parseInt(error.response.headers['retry-after'], 10);
+        if (originalError.response?.headers?.['retry-after']) {
+          errorResponse.error.retryAfter = parseInt(originalError.response.headers['retry-after'], 10);
         }
         break;
       case 400:
-        if (error.code === 'INVALID_REQUEST_ERROR' || error.message.includes('validation')) {
+        if (originalError.code === 'INVALID_REQUEST_ERROR' || originalError.message.includes('validation')) {
           errorResponse.error.code = 'VALIDATION_ERROR';
-          errorResponse.error.message = 'Invalid request: ' + error.message;
+          errorResponse.error.message = 'Invalid request: ' + originalError.message;
         }
         break;
       case 500:
@@ -219,5 +246,6 @@ function createApiResponse(success, data = null, message = null) {
 module.exports = {
   handleSquareError,
   createApiResponse,
-  safeSerialize
+  safeSerialize,
+  createErrorWithCause
 }; 
