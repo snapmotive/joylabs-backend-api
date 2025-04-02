@@ -1,5 +1,7 @@
 /**
- * Handlers for OAuth routes, separated to allow for Lambda function optimization
+ * @fileoverview Square OAuth handlers for Lambda functions
+ * @deprecated This file is being maintained for backward compatibility.
+ * New OAuth implementation should use src/routes/auth.js instead.
  */
 
 const serverless = require('serverless-http');

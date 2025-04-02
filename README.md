@@ -2,6 +2,14 @@
 
 This repository contains the JoyLabs backend API v3, built with Serverless Framework, AWS Lambda, Express, and DynamoDB.
 
+## System Requirements
+
+- Node.js v22 or later
+- AWS CLI configured with appropriate credentials
+- Serverless Framework v3
+
+> Note: This project now requires Node.js v22 for compatibility with AWS Lambda's Node.js 22.x runtime. Earlier versions are no longer supported.
+
 ## Layer-Based Architecture
 
 This project uses AWS Lambda Layers to optimize deployment size and improve maintainability. For detailed information on the layer structure and management, see [LAYERS-README.md](LAYERS-README.md).
@@ -425,4 +433,9 @@ For support or questions, contact support@joylabs.com
 
 ---
 
-*This documentation is maintained by the JoyLabs Backend Team* 
+*This documentation is maintained by the JoyLabs Backend Team*
+
+## Recent Updates
+
+- **Node.js 22 Migration**: The codebase has been updated to run on Node.js 22. See [Node.js 22 Migration Guide](docs/nodejs22-migration.md) for details.
+- **Square SDK v42**: Updated from v35.1.0 to v42.0.0. API property access patterns have been updated across the codebase. 
