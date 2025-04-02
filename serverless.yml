@@ -60,7 +60,10 @@ provider:
   region: us-west-1
   stage: ${opt:stage, 'production'}
   memorySize: 512
-  timeout: 30
+  timeout: 29
+  apiGateway:
+    minimumCompressionSize: 1024
+    shouldStartNameWithService: true
   environment:
     NODE_ENV: production
     API_BASE_URL: https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production
