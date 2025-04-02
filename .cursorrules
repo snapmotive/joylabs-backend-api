@@ -56,6 +56,35 @@
 6. Use production endpoints only (no sandbox)
 7. Do not push or commit to git unless asked
 
+## Node.js 22 Security Features
+1. WebCrypto API for PKCE implementation in src/utils/webCrypto.js
+2. Error Cause for enhanced error tracking in src/utils/errorHandling.js
+3. Native Fetch API with AbortController in src/utils/fetchHelpers.js
+4. Modern cryptographic operations with better randomness
+
+## ESLint and TypeScript Configuration
+- ESLint configured to handle Node.js 22 features
+- TypeScript strict mode enabled
+- Husky pre-commit hooks for code quality
+- Prettier integrated for consistent formatting
+- Required WebCrypto types and definitions
+
+## Common Issues and Solutions
+1. Session issues: Check SESSION_SECRET environment variable
+2. API rate limiting: Implement exponential backoff
+3. Square credential refresh: Use src/services/square.js refreshAccessToken
+4. Memory errors: Increase Lambda memory or optimize dependencies
+5. Cold starts: Optimize layers and implement warming
+6. TypeScript errors: Check tsconfig.json and types
+
+## Deployment Workflow
+1. Ensure all lint checks pass: `npm run lint`
+2. Run local tests: `npm test`
+3. Deploy layers first: `npm run deploy:layers`
+4. Deploy API: `npm run deploy:function:api`
+5. Verify AWS Lambda console for successful deployment
+6. Check CloudWatch logs for any runtime errors
+
 
 
 
