@@ -365,17 +365,34 @@ async function getMerchantInfo(accessToken) {
     
     try {
       // Try first approach for v42 (Square API is sometimes inconsistent with naming)
-      console.log('Attempting to retrieve merchant info with getMerchant');
+      console.log('Attempting to retrieve merchant info with retrieveLocation method');
       
       // Use square API helpers for better retry logic
       response = await squareApiHelpers.executeWithRetry(
-        async (client) => client.merchants.getMerchant('me'),
+        async (client) => client.locationsApi.retrieveLocation('me'),
         client,
         authRetryConfig
       );
+      
+      // Restructure the response to match expected format
+      // Since retrieveLocation returns location data instead of merchant data directly
+      if (response && response.result && response.result.location) {
+        response = {
+          result: {
+            merchant: {
+              id: response.result.location.merchantId,
+              businessName: response.result.location.name,
+              country: response.result.location.country,
+              languageCode: response.result.location.languageCode,
+              currency: response.result.location.currency,
+              status: 'ACTIVE' // Location being returned means the merchant is active
+            }
+          }
+        };
+      }
     } catch (error) {
       // If first approach fails, try an alternative
-      if (error.message.includes('is not a function')) {
+      if (error.message.includes('is not a function') || error.message.includes('retrieveLocation')) {
         console.log('Falling back to alternative method for retrieving merchant');
         
         // Try using direct HTTP request to the Square API
