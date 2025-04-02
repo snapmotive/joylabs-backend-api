@@ -45,7 +45,7 @@ const sessionConfig = {
     },
     reapInterval: 24 * 60 * 60 * 1000 // Cleanup expired sessions every 24 hours
   }) : null,
-  secret: process.env.SESSION_SECRET,
+  secret: process.env.SESSION_SECRET || 'joylabs-session-secret-key-production',
   resave: false,
   saveUninitialized: false,
   cookie: {
