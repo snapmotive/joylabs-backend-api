@@ -8,6 +8,19 @@ plugins:
 custom:
   dotenv:
     path: .env.production
+    include:
+      - NODE_ENV
+      - API_BASE_URL
+      - API_GATEWAY_URL
+      - SQUARE_APPLICATION_ID
+      - SQUARE_ENVIRONMENT
+      - SQUARE_AUTH_URL
+      - SQUARE_TOKEN_URL
+      - SQUARE_CALLBACK_SCHEME
+      - SQUARE_CALLBACK_PATH
+      - STATES_TABLE
+      - SQUARE_CREDENTIALS_SECRET
+      - LOG_LEVEL
   statesTableName: ${self:service}-${self:provider.stage}-states
   squareCredentialsSecret: square-credentials-production
   squareCredentialsSecretArn: arn:aws:secretsmanager:${aws:region}:${aws:accountId}:secret:square-credentials-production-*
@@ -37,7 +50,7 @@ custom:
     oauthDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-oauth-deps-production:1
     square: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-square-production:1
 
-frameworkVersion: '3'
+frameworkVersion: '4'
 
 provider:
   name: aws
