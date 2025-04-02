@@ -20,6 +20,6 @@ Serverless framework versions https://github.com/serverless/serverless/releases
 
 Node.js >=22.0.0 in engines
 Serverless v4.10.1
-Latest serverless plugins (serverless-webpack v5.15.1, serverless-offline v14.4.0, serverless-dotenv-plugin v6.0.0)
+
 Latest AWS SDK v3 packages
 Square SDK v42.0.0
