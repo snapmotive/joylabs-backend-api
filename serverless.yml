@@ -76,6 +76,7 @@ provider:
     SQUARE_CALLBACK_PATH: square-callback
     STATES_TABLE: ${self:custom.statesTableName}
     SQUARE_CREDENTIALS_SECRET: square-credentials-production
+    SESSION_SECRET: ${env:SESSION_SECRET, 'joylabs-session-secret-key-production'}
     LOG_LEVEL: debug
   iam:
     role:
@@ -92,6 +93,7 @@ provider:
             - dynamodb:DescribeTable
           Resource:
             - !GetAtt StatesTable.Arn
+            - !GetAtt SessionsTable.Arn
             - arn:aws:dynamodb:us-west-1:*:table/joylabs-backend-api-v3-users-production
             - arn:aws:dynamodb:us-west-1:*:table/joylabs-backend-api-v3-sessions-production
             - arn:aws:dynamodb:us-west-1:*:table/joylabs-catalog-products-v3-production
@@ -252,4 +254,19 @@ resources:
         BillingMode: PAY_PER_REQUEST
         TimeToLiveSpecification:
           AttributeName: ttl
+          Enabled: true
+          
+    SessionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: joylabs-sessions
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TimeToLiveSpecification:
+          AttributeName: expires
           Enabled: true 
