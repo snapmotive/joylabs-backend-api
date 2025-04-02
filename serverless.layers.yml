@@ -7,6 +7,8 @@ provider:
   runtime: nodejs22.x
   region: us-west-1
   stage: ${opt:stage, 'production'}
+  build:
+    esbuild: false
   
 layers:
   core:

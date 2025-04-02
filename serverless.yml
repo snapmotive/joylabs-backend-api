@@ -72,6 +72,8 @@ provider:
     STATES_TABLE: ${self:custom.statesTableName}
     SQUARE_CREDENTIALS_SECRET: square-credentials-production
     LOG_LEVEL: debug
+  build:
+    esbuild: false
   iam:
     role:
       statements:
