@@ -42,4 +42,4 @@ router.get('/test', (req, res) => {
   res.json({ message: 'Categories API is working' });
 });
 
-module.exports = router; 
+module.exports = router;

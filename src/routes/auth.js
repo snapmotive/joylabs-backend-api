@@ -2,20 +2,34 @@ const express = require('express');
 const router = express.Router();
 const authMiddleware = require('../middleware/auth');
 const squareService = require('../services/square');
-const { generateOAuthUrl, exchangeCodeForToken, getMerchantInfo, getSquareClient } = require('../services/square');
-const { generateStateParam, generateCodeVerifier, generateCodeChallenge } = require('../services/square');
+const {
+  generateOAuthUrl,
+  exchangeCodeForToken,
+  getMerchantInfo,
+  getSquareClient,
+} = require('../services/square');
+const {
+  generateStateParam,
+  generateCodeVerifier,
+  generateCodeChallenge,
+} = require('../services/square');
 const { createUser, findUserBySquareMerchantId, updateUser } = require('../models/user');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  UpdateCommand,
+} = require('@aws-sdk/lib-dynamodb');
 const { SquareClient } = require('square');
 
 /**
  * IMPORTANT: This is the primary implementation of the Square OAuth flow.
- * The duplicate implementation in oauthHandlers.js is maintained for backward 
+ * The duplicate implementation in oauthHandlers.js is maintained for backward
  * compatibility but will be removed in a future version.
- * 
+ *
  * All new OAuth functionality should be added here rather than in oauthHandlers.js.
  */
 
@@ -34,10 +48,12 @@ if (!global.oauthStates) {
 const dynamoDbClient = new DynamoDBClient({
   maxAttempts: 3,
   requestTimeout: 3000,
-  ...(process.env.IS_OFFLINE === 'true' ? {
-    region: 'localhost',
-    endpoint: 'http://localhost:8000'
-  } : {})
+  ...(process.env.IS_OFFLINE === 'true'
+    ? {
+        region: 'localhost',
+        endpoint: 'http://localhost:8000',
+      }
+    : {}),
 });
 const docClient = DynamoDBDocumentClient.from(dynamoDbClient);
 
@@ -45,7 +61,7 @@ const docClient = DynamoDBDocumentClient.from(dynamoDbClient);
 router.post('/store-verifier', async (req, res) => {
   try {
     const { request_id, code_verifier } = req.body;
-    
+
     // Log request details
     console.log('Store verifier request received:', {
       hasRequestId: !!request_id,
@@ -53,57 +69,61 @@ router.post('/store-verifier', async (req, res) => {
       hasCodeVerifier: !!code_verifier,
       codeVerifierLength: code_verifier?.length || 0,
       codeVerifierFirstChars: code_verifier ? code_verifier.substring(0, 5) : null,
-      codeVerifierLastChars: code_verifier ? code_verifier.substring(code_verifier.length - 5) : null
+      codeVerifierLastChars: code_verifier
+        ? code_verifier.substring(code_verifier.length - 5)
+        : null,
     });
-    
+
     // Validate required parameters
     if (!request_id) {
       console.error('Missing request_id in store-verifier request');
       return res.status(400).json({ error: 'Missing request_id parameter' });
     }
-    
+
     if (!code_verifier) {
       console.error('Missing code_verifier in store-verifier request');
       return res.status(400).json({ error: 'Missing code_verifier parameter' });
     }
-    
+
     // Validate code_verifier format (43-128 chars, URL-safe base64)
     if (code_verifier.length < 43 || code_verifier.length > 128) {
-      console.error(`Invalid code_verifier length: ${code_verifier.length} (must be 43-128 characters)`);
-      return res.status(400).json({ 
-        error: 'Invalid code_verifier format', 
-        details: `Length ${code_verifier.length} is outside valid range (43-128)`
+      console.error(
+        `Invalid code_verifier length: ${code_verifier.length} (must be 43-128 characters)`
+      );
+      return res.status(400).json({
+        error: 'Invalid code_verifier format',
+        details: `Length ${code_verifier.length} is outside valid range (43-128)`,
       });
     }
-    
+
     // Check characters are valid for URL-safe base64
     const validChars = /^[A-Za-z0-9\-._~]+$/;
     if (!validChars.test(code_verifier)) {
       console.error('Code verifier contains invalid characters');
-      return res.status(400).json({ 
-        error: 'Invalid code_verifier format', 
-        details: 'Contains invalid characters (only A-Z, a-z, 0-9, -, ., _, ~ allowed)'
+      return res.status(400).json({
+        error: 'Invalid code_verifier format',
+        details: 'Contains invalid characters (only A-Z, a-z, 0-9, -, ., _, ~ allowed)',
       });
     }
-    
+
     // Store code_verifier with request_id (with TTL of 10 minutes)
     global.codeVerifierStore.set(request_id, {
       code_verifier,
       timestamp: Date.now(),
-      ttl: 10 * 60 * 1000 // 10 minutes in milliseconds
+      ttl: 10 * 60 * 1000, // 10 minutes in milliseconds
     });
-    
+
     console.log(`Code verifier stored successfully for request_id: ${request_id}`);
-    
+
     // Clean up expired entries every time we add a new one
     cleanupExpiredCodeVerifiers();
-    
+
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('Error storing code verifier:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to store code verifier',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });
@@ -112,14 +132,14 @@ router.post('/store-verifier', async (req, res) => {
 function cleanupExpiredCodeVerifiers() {
   const now = Date.now();
   let count = 0;
-  
+
   for (const [request_id, data] of global.codeVerifierStore.entries()) {
     if (now - data.timestamp > data.ttl) {
       global.codeVerifierStore.delete(request_id);
       count++;
     }
   }
-  
+
   if (count > 0) {
     console.log(`Cleaned up ${count} expired code verifiers`);
   }
@@ -128,18 +148,18 @@ function cleanupExpiredCodeVerifiers() {
 // Square OAuth routes for web
 router.get('/square', async (req, res) => {
   console.log('Starting Square OAuth flow');
-  
+
   try {
     // Generate a secure state parameter
     const state = generateStateParam();
     console.log('Generated state parameter:', state);
-    
+
     // Generate code verifier for PKCE flow
     const codeVerifier = generateCodeVerifier();
     console.log('Generated code verifier for PKCE flow');
-    
+
     // Store state in DynamoDB with TTL
-    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // 10 minutes
+    const ttl = Math.floor(Date.now() / 1000) + 10 * 60; // 10 minutes
     const params = {
       TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
       Item: {
@@ -148,43 +168,43 @@ router.get('/square', async (req, res) => {
         used: false,
         ttl: ttl,
         code_verifier: codeVerifier,
-        redirectUrl: 'joylabs://square-callback'
-      }
+        redirectUrl: 'joylabs://square-callback',
+      },
     };
 
     console.log('Storing state in DynamoDB:', {
       tableName: params.TableName,
       state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
-      ttl: new Date(ttl * 1000).toISOString()
+      ttl: new Date(ttl * 1000).toISOString(),
     });
 
     const result = await docClient.send(new PutCommand(params));
-    
+
     console.log('DynamoDB PutCommand result:', {
       statusCode: result.$metadata.httpStatusCode,
-      requestId: result.$metadata.requestId
+      requestId: result.$metadata.requestId,
     });
-    
+
     // Set code verifier in cookie for callback
     res.cookie('square_oauth_code_verifier', codeVerifier, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       maxAge: 5 * 60 * 1000, // 5 minutes
-      sameSite: 'lax'
+      sameSite: 'lax',
     });
-    
+
     // Generate OAuth URL with the secure state and code verifier
     const url = await generateOAuthUrl(state, codeVerifier);
     console.log('Redirecting to Square OAuth URL');
-    
+
     // Log details for debugging (with redacted values)
     console.log('OAuth request details:', {
       environment: 'production',
       state: state,
       code_verifier: codeVerifier.substring(0, 5) + '...',
-      has_cookie: true
+      has_cookie: true,
     });
-    
+
     res.redirect(url);
   } catch (error) {
     console.error('Error generating OAuth URL:', error);
@@ -199,7 +219,7 @@ router.get('/square', async (req, res) => {
 router.get('/square/callback', async (req, res) => {
   try {
     const { code, state, error, app_callback } = req.query;
-    
+
     console.log('Square callback received:', {
       hasCode: !!code,
       state,
@@ -207,14 +227,14 @@ router.get('/square/callback', async (req, res) => {
       app_callback,
       STATES_TABLE: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
       headers: req.headers,
-      query: req.query
+      query: req.query,
     });
-    
+
     if (error) {
       console.error('Error from Square:', error);
       return res.redirect(`joylabs://square-callback?error=${encodeURIComponent(error)}`);
     }
-    
+
     if (!code) {
       console.error('No code provided in Square callback');
       return res.redirect('joylabs://square-callback?error=missing_code');
@@ -229,43 +249,45 @@ router.get('/square/callback', async (req, res) => {
     const getStateParams = {
       TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
       Key: {
-        state: state
-      }
+        state: state,
+      },
     };
 
     console.log('Retrieving state data from DynamoDB:', {
       tableName: getStateParams.TableName,
-      state: state
+      state: state,
     });
 
     try {
       const result = await docClient.send(new GetCommand(getStateParams));
-      
+
       if (!result.Item) {
         console.error('No state data found in DynamoDB');
         return res.redirect('joylabs://square-callback?error=invalid_state');
       }
-      
+
       console.log('Retrieved state data from DynamoDB');
-      
+
       const stateData = result.Item;
-      
+
       // Check if state has already been used
       if (stateData.used) {
         console.error('State has already been used');
         return res.redirect('joylabs://square-callback?error=state_already_used');
       }
-      
+
       // Get code verifier from state data
       const codeVerifier = stateData.code_verifier;
       const redirectUrl = stateData.redirectUrl || 'joylabs://square-callback';
-      
+
       if (!codeVerifier) {
         console.error('No code verifier found for state');
-        
+
         // Check if we're dealing with a non-PKCE flow (for backward compatibility)
         if (stateData.code_challenge) {
-          return res.redirect(`${redirectUrl}?error=missing_code_verifier&details=code_challenge_exists`);
+          return res.redirect(
+            `${redirectUrl}?error=missing_code_verifier&details=code_challenge_exists`
+          );
         }
 
         // Try to proceed without code verifier (may work for non-PKCE flows)
@@ -278,12 +300,12 @@ router.get('/square/callback', async (req, res) => {
           const updateParams = {
             TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
             Key: {
-              state: state
+              state: state,
             },
             UpdateExpression: 'set used = :used',
             ExpressionAttributeValues: {
-              ':used': true
-            }
+              ':used': true,
+            },
           };
 
           await docClient.send(new UpdateCommand(updateParams));
@@ -297,11 +319,14 @@ router.get('/square/callback', async (req, res) => {
             console.log('Retrieved merchant info using native fetch API');
           } catch (fetchError) {
             // Fall back to SDK implementation if fetch fails
-            console.warn('Fetch API failed for merchant info, falling back to SDK:', fetchError.message);
+            console.warn(
+              'Fetch API failed for merchant info, falling back to SDK:',
+              fetchError.message
+            );
             merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
             console.log('Retrieved merchant info using Square SDK');
           }
-          
+
           console.log('Retrieved merchant info');
 
           // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
@@ -317,17 +342,19 @@ router.get('/square/callback', async (req, res) => {
               access_token: `${tokenResponse.access_token.substring(0, 5)}...${tokenResponse.access_token.substring(tokenResponse.access_token.length - 5)}`,
               refresh_token: `${tokenResponse.refresh_token.substring(0, 5)}...${tokenResponse.refresh_token.substring(tokenResponse.refresh_token.length - 5)}`,
               merchant_id: tokenResponse.merchant_id,
-              business_name: merchantInfo.businessName
-            }
+              business_name: merchantInfo.businessName,
+            },
           });
 
           console.log('Redirecting to app with tokens:', {
-            redirectUrl: finalRedirectUrl.substring(0, 30) + '...'
+            redirectUrl: finalRedirectUrl.substring(0, 30) + '...',
           });
           return res.redirect(finalRedirectUrl);
         } catch (error) {
           console.error('Error in non-PKCE flow:', error);
-          return res.redirect(`${redirectUrl}?error=token_exchange_failed&details=non_pkce_failed&message=${encodeURIComponent(error.message)}`);
+          return res.redirect(
+            `${redirectUrl}?error=token_exchange_failed&details=non_pkce_failed&message=${encodeURIComponent(error.message)}`
+          );
         }
       }
 
@@ -340,12 +367,12 @@ router.get('/square/callback', async (req, res) => {
         const updateParams = {
           TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
           Key: {
-            state: state
+            state: state,
           },
           UpdateExpression: 'set used = :used',
           ExpressionAttributeValues: {
-            ':used': true
-          }
+            ':used': true,
+          },
         };
 
         await docClient.send(new UpdateCommand(updateParams));
@@ -359,11 +386,14 @@ router.get('/square/callback', async (req, res) => {
           console.log('Retrieved merchant info using native fetch API');
         } catch (fetchError) {
           // Fall back to SDK implementation if fetch fails
-          console.warn('Fetch API failed for merchant info, falling back to SDK:', fetchError.message);
+          console.warn(
+            'Fetch API failed for merchant info, falling back to SDK:',
+            fetchError.message
+          );
           merchantInfo = await squareService.getMerchantInfo(tokenResponse.access_token);
           console.log('Retrieved merchant info using Square SDK');
         }
-        
+
         console.log('Retrieved merchant info');
 
         // Build the redirect URL with all necessary parameters - using manual construction for better Safari compatibility
@@ -379,17 +409,19 @@ router.get('/square/callback', async (req, res) => {
             access_token: `${tokenResponse.access_token.substring(0, 5)}...${tokenResponse.access_token.substring(tokenResponse.access_token.length - 5)}`,
             refresh_token: `${tokenResponse.refresh_token.substring(0, 5)}...${tokenResponse.refresh_token.substring(tokenResponse.refresh_token.length - 5)}`,
             merchant_id: tokenResponse.merchant_id,
-            business_name: merchantInfo.businessName
-          }
+            business_name: merchantInfo.businessName,
+          },
         });
 
         console.log('Redirecting to app with tokens:', {
-          redirectUrl: finalRedirectUrl.substring(0, 30) + '...'
+          redirectUrl: finalRedirectUrl.substring(0, 30) + '...',
         });
         return res.redirect(finalRedirectUrl);
       } catch (error) {
         console.error('Error exchanging code for token:', error);
-        return res.redirect(`${redirectUrl}?error=token_exchange_failed&message=${encodeURIComponent(error.message)}`);
+        return res.redirect(
+          `${redirectUrl}?error=token_exchange_failed&message=${encodeURIComponent(error.message)}`
+        );
       }
     } catch (dbError) {
       console.error('Error retrieving state from DynamoDB:', dbError);
@@ -404,56 +436,59 @@ router.get('/square/callback', async (req, res) => {
 // Square OAuth route for mobile
 router.get('/square/mobile-init', async (req, res) => {
   console.log('Mobile OAuth initialized with Expo AuthSession');
-  
+
   try {
     // Get Square credentials
     const credentials = await squareService.getSquareCredentials();
-    
+
     if (!credentials || !credentials.applicationId) {
       throw new Error('Failed to get Square application ID');
     }
-    
+
     console.log('Using Square Application ID:', credentials.applicationId);
-    
+
     // Generate a state parameter
     const state = generateStateParam();
     console.log(`Mobile OAuth initialized with state: ${state}`);
-    
+
     // Store state in DynamoDB
     const command = new PutCommand({
       TableName: process.env.DYNAMODB_STATES_TABLE,
       Item: {
         state,
         createdAt: Date.now(),
-        ttl: Math.floor(Date.now() / 1000) + (5 * 60) // 5 minutes TTL
-      }
+        ttl: Math.floor(Date.now() / 1000) + 5 * 60, // 5 minutes TTL
+      },
     });
-    
+
     await docClient.send(command);
-    
+
     // Generate the authorization URL for Square
     const baseUrl = 'https://connect.squareup.com/oauth2/authorize';
     const params = new URLSearchParams({
       client_id: credentials.applicationId,
       response_type: 'code',
-      scope: 'MERCHANT_PROFILE_READ ITEMS_READ ITEMS_WRITE ORDERS_READ ORDERS_WRITE PAYMENTS_READ PAYMENTS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE INVENTORY_READ INVENTORY_WRITE',
+      scope:
+        'MERCHANT_PROFILE_READ ITEMS_READ ITEMS_WRITE ORDERS_READ ORDERS_WRITE PAYMENTS_READ PAYMENTS_WRITE CUSTOMERS_READ CUSTOMERS_WRITE INVENTORY_READ INVENTORY_WRITE',
       state: state,
-      redirect_uri: process.env.SQUARE_REDIRECT_URL || 'https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback'
+      redirect_uri:
+        process.env.SQUARE_REDIRECT_URL ||
+        'https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/api/auth/square/callback',
     });
-    
+
     const authUrl = `${baseUrl}?${params.toString()}`;
     console.log('Generated auth URL for mobile client');
-    
+
     // Return the authorization URL and state
     res.json({
       url: authUrl,
-      state
+      state,
     });
   } catch (error) {
     console.error('Error initiating mobile OAuth:', error);
     res.status(500).json({
       error: 'Failed to initiate OAuth process',
-      details: error.message
+      details: error.message,
     });
   }
 });
@@ -550,32 +585,40 @@ router.get('/square/test', (req, res) => {
             <tr>
               <td>SQUARE_ENVIRONMENT</td>
               <td>${process.env.SQUARE_ENVIRONMENT || 'Not set'}</td>
-              <td>${process.env.SQUARE_ENVIRONMENT === 'production' ? 
-                '<span class="warning">⚠️ Production mode - test codes won\'t work</span>' : 
-                '<span class="success">✓ Sandbox mode - good for testing</span>'}</td>
+              <td>${
+                process.env.SQUARE_ENVIRONMENT === 'production'
+                  ? '<span class="warning">⚠️ Production mode - test codes won\'t work</span>'
+                  : '<span class="success">✓ Sandbox mode - good for testing</span>'
+              }</td>
             </tr>
             <tr>
               <td>SQUARE_APPLICATION_ID</td>
               <td>${process.env.SQUARE_APPLICATION_ID ? '✓ Set' : '✗ Not set'}</td>
-              <td>${process.env.SQUARE_APPLICATION_ID ? 
-                '<span class="success">✓</span>' : 
-                '<span class="error">✗ Missing application ID</span>'}</td>
+              <td>${
+                process.env.SQUARE_APPLICATION_ID
+                  ? '<span class="success">✓</span>'
+                  : '<span class="error">✗ Missing application ID</span>'
+              }</td>
             </tr>
             <tr>
               <td>SQUARE_APPLICATION_SECRET</td>
               <td>${process.env.SQUARE_APPLICATION_SECRET ? '✓ Set (hidden)' : '✗ Not set'}</td>
-              <td>${process.env.SQUARE_APPLICATION_SECRET ? 
-                '<span class="success">✓</span>' : 
-                '<span class="error">✗ Missing application secret</span>'}</td>
+              <td>${
+                process.env.SQUARE_APPLICATION_SECRET
+                  ? '<span class="success">✓</span>'
+                  : '<span class="error">✗ Missing application secret</span>'
+              }</td>
             </tr>
             <tr>
               <td>SQUARE_REDIRECT_URL</td>
               <td>${process.env.SQUARE_REDIRECT_URL || 'Not set'}</td>
-              <td>${process.env.SQUARE_REDIRECT_URL ? 
-                (process.env.SQUARE_REDIRECT_URL.includes(req.headers.host) ? 
-                  '<span class="success">✓ Matches current host</span>' : 
-                  `<span class="warning">⚠️ Does not match current host (${req.headers.host})</span>`) : 
-                '<span class="error">✗ Missing redirect URL</span>'}</td>
+              <td>${
+                process.env.SQUARE_REDIRECT_URL
+                  ? process.env.SQUARE_REDIRECT_URL.includes(req.headers.host)
+                    ? '<span class="success">✓ Matches current host</span>'
+                    : `<span class="warning">⚠️ Does not match current host (${req.headers.host})</span>`
+                  : '<span class="error">✗ Missing redirect URL</span>'
+              }</td>
             </tr>
             <tr>
               <td>Current Host</td>
@@ -585,9 +628,11 @@ router.get('/square/test', (req, res) => {
             <tr>
               <td>Current Protocol</td>
               <td>${req.protocol}</td>
-              <td>${req.protocol === 'https' ? 
-                '<span class="success">✓ Secure</span>' : 
-                '<span class="warning">⚠️ Not secure - Square may require HTTPS</span>'}</td>
+              <td>${
+                req.protocol === 'https'
+                  ? '<span class="success">✓ Secure</span>'
+                  : '<span class="warning">⚠️ Not secure - Square may require HTTPS</span>'
+              }</td>
             </tr>
           </table>
         </div>
@@ -661,32 +706,32 @@ router.get('/square/test', (req, res) => {
 router.get('/square/test-callback', async (req, res) => {
   try {
     console.log('Test callback invoked');
-    
+
     // Show Square environment in the response
     const environment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
     const clientId = process.env.SQUARE_APPLICATION_ID || 'unknown';
-    
+
     // Set test cookie for state validation
     const testState = 'test-state-parameter';
     res.cookie('square_oauth_state', testState, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 3600000 // 1 hour
+      maxAge: 3600000, // 1 hour
     });
-    
+
     // Setup session state if we're using sessions
     if (req.session) {
       if (!req.session.oauthParams) {
         req.session.oauthParams = {};
       }
-      
+
       req.session.oauthParams[testState] = {
         codeVerifier: 'test-code-verifier',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
       };
     }
-    
+
     // Create a test response page that shows diagnostic information
     // and also provides a button to simulate the callback
     const html = `
@@ -752,7 +797,7 @@ router.get('/square/test-callback', async (req, res) => {
       </body>
       </html>
     `;
-    
+
     res.send(html);
   } catch (error) {
     console.error('Test callback error:', error);
@@ -763,22 +808,22 @@ router.get('/square/test-callback', async (req, res) => {
 // Add a test route that sets up a cookie for easier testing
 router.get('/square/set-test-cookie', (req, res) => {
   console.log('Setting test cookies for OAuth testing');
-  
+
   // Set test cookies
   res.cookie('square_oauth_state', 'test-state-parameter', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 3600000 // 1 hour
+    maxAge: 3600000, // 1 hour
   });
-  
+
   res.cookie('square_oauth_code_verifier', 'test_code_verifier', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 3600000 // 1 hour
+    maxAge: 3600000, // 1 hour
   });
-  
+
   res.send(`
     <html>
       <head>
@@ -864,7 +909,7 @@ router.post('/register-token', async (req, res) => {
 router.post('/register-state', async (req, res) => {
   console.log('Received state registration request:', {
     body: req.body,
-    headers: req.headers
+    headers: req.headers,
   });
 
   try {
@@ -874,9 +919,9 @@ router.post('/register-state', async (req, res) => {
       console.error('Missing state parameter in request body');
       return res.status(400).json({ error: 'Missing state parameter' });
     }
-    
+
     // Store state in DynamoDB with TTL
-    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // 10 minutes
+    const ttl = Math.floor(Date.now() / 1000) + 10 * 60; // 10 minutes
     const params = {
       TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
       Item: {
@@ -884,8 +929,8 @@ router.post('/register-state', async (req, res) => {
         timestamp: Date.now(),
         used: false,
         ttl: ttl,
-        redirectUrl: redirectUrl || 'joylabs://square-callback'
-      }
+        redirectUrl: redirectUrl || 'joylabs://square-callback',
+      },
     };
 
     // Add code_verifier if provided
@@ -905,23 +950,23 @@ router.post('/register-state', async (req, res) => {
       state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
       ttl: new Date(ttl * 1000).toISOString(),
       hasCodeVerifier: !!code_verifier,
-      hasCodeChallenge: !!code_challenge
+      hasCodeChallenge: !!code_challenge,
     });
 
     const result = await docClient.send(new PutCommand(params));
-    
+
     console.log('DynamoDB PutCommand result:', {
       statusCode: result.$metadata.httpStatusCode,
-      requestId: result.$metadata.requestId
+      requestId: result.$metadata.requestId,
     });
 
     console.log(`State ${state} registered successfully`);
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('Error registering state:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to register state',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });
@@ -930,32 +975,32 @@ router.post('/register-state', async (req, res) => {
 router.get('/connect/url', async (req, res) => {
   console.log('Received OAuth URL request:', {
     query: req.query,
-    headers: req.headers
+    headers: req.headers,
   });
 
   try {
     const { state, code_challenge, code_verifier, redirect_uri } = req.query;
-    
+
     // Validate required parameters
     if (!state || !code_challenge || !redirect_uri) {
       console.error('Missing required parameters:', { state, code_challenge, redirect_uri });
-        return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Missing required parameters',
-        details: 'state, code_challenge, and redirect_uri are required'
+        details: 'state, code_challenge, and redirect_uri are required',
       });
     }
 
     // Validate redirect_uri format for deep linking
     if (!redirect_uri.startsWith('joylabs://')) {
       console.error('Invalid redirect_uri format:', redirect_uri);
-        return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid redirect_uri',
-        details: 'redirect_uri must start with joylabs://'
+        details: 'redirect_uri must start with joylabs://',
       });
     }
 
     // Store state in DynamoDB with TTL
-    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // 10 minutes
+    const ttl = Math.floor(Date.now() / 1000) + 10 * 60; // 10 minutes
     const params = {
       TableName: process.env.STATES_TABLE || 'joylabs-backend-api-v3-production-states',
       Item: {
@@ -964,8 +1009,8 @@ router.get('/connect/url', async (req, res) => {
         used: false,
         ttl: ttl,
         code_challenge: code_challenge,
-        redirect_uri: redirect_uri
-      }
+        redirect_uri: redirect_uri,
+      },
     };
 
     // Store code_verifier if provided (for PKCE)
@@ -979,14 +1024,14 @@ router.get('/connect/url', async (req, res) => {
       state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
       ttl: new Date(ttl * 1000).toISOString(),
       hasCodeChallenge: true,
-      hasCodeVerifier: !!code_verifier
+      hasCodeVerifier: !!code_verifier,
     });
 
     const result = await docClient.send(new PutCommand(params));
-    
+
     console.log('DynamoDB PutCommand result:', {
       statusCode: result.$metadata.httpStatusCode,
-      requestId: result.$metadata.requestId
+      requestId: result.$metadata.requestId,
     });
 
     const url = await squareService.generateOAuthUrl(state, code_challenge, redirect_uri);
@@ -994,9 +1039,9 @@ router.get('/connect/url', async (req, res) => {
     res.json({ url });
   } catch (error) {
     console.error('Error generating OAuth URL:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to generate OAuth URL',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });
@@ -1009,23 +1054,23 @@ router.post('/generate-pkce', async (req, res) => {
   try {
     // Generate PKCE code verifier
     const codeVerifier = await squareService.generateCodeVerifier();
-    
+
     // Generate code challenge from verifier
     const codeChallenge = await squareService.generateCodeChallenge(codeVerifier);
-    
+
     // Return both to the client
     res.json({
       code_verifier: codeVerifier,
-      code_challenge: codeChallenge
+      code_challenge: codeChallenge,
     });
   } catch (error) {
     console.error('Error generating PKCE codes:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to generate PKCE codes',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });
 
 // Export the router
-module.exports = router; 
+module.exports = router;

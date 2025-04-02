@@ -1,11 +1,19 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, ScanCommand, GetCommand, QueryCommand, PutCommand, UpdateCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  ScanCommand,
+  GetCommand,
+  QueryCommand,
+  PutCommand,
+  UpdateCommand,
+  DeleteCommand,
+} = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 // Configure AWS
 const client = new DynamoDBClient({
   maxAttempts: 3,
-  requestTimeout: 3000
+  requestTimeout: 3000,
 });
 
 const dynamoDb = DynamoDBDocumentClient.from(client);
@@ -20,7 +28,7 @@ const CategoryService = {
    */
   async getAll() {
     const params = {
-      TableName: categoriesTable
+      TableName: categoriesTable,
     };
 
     const result = await dynamoDb.send(new ScanCommand(params));
@@ -34,7 +42,7 @@ const CategoryService = {
   async getById(id) {
     const params = {
       TableName: categoriesTable,
-      Key: { id }
+      Key: { id },
     };
 
     const result = await dynamoDb.send(new GetCommand(params));
@@ -51,11 +59,11 @@ const CategoryService = {
       IndexName: 'NameIndex',
       KeyConditionExpression: '#name = :name',
       ExpressionAttributeNames: {
-        '#name': 'name'
+        '#name': 'name',
       },
       ExpressionAttributeValues: {
-        ':name': name
-      }
+        ':name': name,
+      },
     };
 
     const result = await dynamoDb.send(new QueryCommand(params));
@@ -78,12 +86,12 @@ const CategoryService = {
       ...category,
       isActive: true,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
 
     const params = {
       TableName: categoriesTable,
-      Item: newCategory
+      Item: newCategory,
     };
 
     await dynamoDb.send(new PutCommand(params));
@@ -97,10 +105,10 @@ const CategoryService = {
    */
   async update(id, updates) {
     const timestamp = new Date().toISOString();
-    
+
     let updateExpression = 'SET updatedAt = :updatedAt';
     const expressionAttributeValues = {
-      ':updatedAt': timestamp
+      ':updatedAt': timestamp,
     };
 
     Object.keys(updates).forEach((key, index) => {
@@ -116,7 +124,7 @@ const CategoryService = {
       Key: { id },
       UpdateExpression: updateExpression,
       ExpressionAttributeValues: expressionAttributeValues,
-      ReturnValues: 'ALL_NEW'
+      ReturnValues: 'ALL_NEW',
     };
 
     const result = await dynamoDb.send(new UpdateCommand(params));
@@ -130,11 +138,11 @@ const CategoryService = {
   async delete(id) {
     const params = {
       TableName: categoriesTable,
-      Key: { id }
+      Key: { id },
     };
 
     return dynamoDb.send(new DeleteCommand(params));
-  }
+  },
 };
 
-module.exports = CategoryService; 
+module.exports = CategoryService;

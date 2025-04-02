@@ -1,6 +1,6 @@
 /**
  * API Rate Limiter
- * 
+ *
  * Implements a token bucket algorithm for rate limiting Square API requests
  * to proactively avoid hitting rate limits.
  */
@@ -8,9 +8,9 @@
 // Token bucket configuration based on Square's limits
 // https://developer.squareup.com/docs/build-basics/rate-limiting
 const DEFAULT_BUCKET_CONFIG = {
-  tokensPerInterval: 20,     // Default tokens per interval (conservative)
-  intervalMs: 1000,          // 1 second
-  bucketSize: 30             // Maximum tokens that can accumulate
+  tokensPerInterval: 20, // Default tokens per interval (conservative)
+  intervalMs: 1000, // 1 second
+  bucketSize: 30, // Maximum tokens that can accumulate
 };
 
 // Store for different buckets (one per endpoint or category)
@@ -27,7 +27,7 @@ class TokenBucket {
     this.bucketSize = config.bucketSize || DEFAULT_BUCKET_CONFIG.bucketSize;
     this.lastRefillTimestamp = Date.now();
   }
-  
+
   /**
    * Refill the bucket based on elapsed time
    * @private
@@ -35,17 +35,17 @@ class TokenBucket {
   _refill() {
     const now = Date.now();
     const elapsedMs = now - this.lastRefillTimestamp;
-    
+
     if (elapsedMs > 0) {
       // Calculate how many tokens to add based on elapsed time
       const newTokens = (elapsedMs / this.intervalMs) * this.tokensPerInterval;
-      
+
       // Add tokens, but don't exceed bucket size
       this.tokens = Math.min(this.bucketSize, this.tokens + newTokens);
       this.lastRefillTimestamp = now;
     }
   }
-  
+
   /**
    * Try to consume tokens
    * @param {number} count - Number of tokens to consume (default: 1)
@@ -53,15 +53,15 @@ class TokenBucket {
    */
   tryConsume(count = 1) {
     this._refill();
-    
+
     if (this.tokens >= count) {
       this.tokens -= count;
       return true;
     }
-    
+
     return false;
   }
-  
+
   /**
    * Calculate wait time until enough tokens are available
    * @param {number} count - Number of tokens needed
@@ -69,14 +69,14 @@ class TokenBucket {
    */
   getWaitTimeMs(count = 1) {
     this._refill();
-    
+
     if (this.tokens >= count) {
       return 0;
     }
-    
+
     // Calculate how many more tokens we need
     const tokensNeeded = count - this.tokens;
-    
+
     // Calculate how long it will take to get those tokens
     return (tokensNeeded / this.tokensPerInterval) * this.intervalMs;
   }
@@ -90,12 +90,15 @@ class TokenBucket {
  */
 function getBucket(endpoint, config = {}) {
   if (!buckets.has(endpoint)) {
-    buckets.set(endpoint, new TokenBucket({
-      ...DEFAULT_BUCKET_CONFIG,
-      ...config
-    }));
+    buckets.set(
+      endpoint,
+      new TokenBucket({
+        ...DEFAULT_BUCKET_CONFIG,
+        ...config,
+      })
+    );
   }
-  
+
   return buckets.get(endpoint);
 }
 
@@ -118,18 +121,18 @@ function tryAcquire(endpoint, cost = 1) {
  */
 async function acquire(endpoint, cost = 1) {
   const bucket = getBucket(endpoint);
-  
+
   if (bucket.tryConsume(cost)) {
     return;
   }
-  
+
   // Wait for the required time
   const waitTimeMs = bucket.getWaitTimeMs(cost);
-  
+
   if (waitTimeMs > 0) {
     console.log(`Rate limiting: Waiting ${waitTimeMs}ms before making request to ${endpoint}`);
     await new Promise(resolve => setTimeout(resolve, waitTimeMs));
-    
+
     // Consume tokens after waiting
     bucket.tryConsume(cost);
   }
@@ -151,14 +154,17 @@ function rateLimit(fn, endpoint, cost = 1) {
 
 /**
  * Configure a specific bucket
- * @param {string} endpoint - Endpoint identifier 
+ * @param {string} endpoint - Endpoint identifier
  * @param {Object} config - Configuration
  */
 function configureBucket(endpoint, config) {
-  buckets.set(endpoint, new TokenBucket({
-    ...DEFAULT_BUCKET_CONFIG,
-    ...config
-  }));
+  buckets.set(
+    endpoint,
+    new TokenBucket({
+      ...DEFAULT_BUCKET_CONFIG,
+      ...config,
+    })
+  );
 }
 
 // Export the API
@@ -167,5 +173,5 @@ module.exports = {
   acquire,
   rateLimit,
   configureBucket,
-  DEFAULT_BUCKET_CONFIG
-}; 
+  DEFAULT_BUCKET_CONFIG,
+};

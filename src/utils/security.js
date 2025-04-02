@@ -4,12 +4,13 @@ const { CloudWatchClient, PutMetricDataCommand } = require('@aws-sdk/client-clou
 let cloudwatch;
 if (process.env.NODE_ENV === 'production') {
   cloudwatch = new CloudWatchClient({
-    region: process.env.AWS_REGION || 'us-west-1'
+    region: process.env.AWS_REGION || 'us-west-1',
   });
 }
 
 // For testing/development
-const useMockData = process.env.ENABLE_MOCK_DATA === 'true' || process.env.NODE_ENV !== 'production';
+const useMockData =
+  process.env.ENABLE_MOCK_DATA === 'true' || process.env.NODE_ENV !== 'production';
 const mockLogs = [];
 
 /**
@@ -25,7 +26,7 @@ const logSecurityEvent = async (eventType, details, severity = 'INFO') => {
       console.log(`[SECURITY:${severity}] ${eventType}:`, details);
       return;
     }
-    
+
     // Create CloudWatch metric
     const command = new PutMetricDataCommand({
       Namespace: 'JoyLabs/Security',
@@ -37,20 +38,20 @@ const logSecurityEvent = async (eventType, details, severity = 'INFO') => {
           Dimensions: [
             {
               Name: 'Environment',
-              Value: process.env.NODE_ENV || 'dev'
+              Value: process.env.NODE_ENV || 'dev',
             },
             {
               Name: 'Severity',
-              Value: severity
-            }
+              Value: severity,
+            },
           ],
-          Timestamp: new Date()
-        }
-      ]
+          Timestamp: new Date(),
+        },
+      ],
     });
-    
+
     await cloudwatch.send(command);
-    
+
     // Log full details for analysis
     console.log(`[SECURITY:${severity}] ${eventType}:`, JSON.stringify(details));
   } catch (error) {
@@ -62,11 +63,15 @@ const logSecurityEvent = async (eventType, details, severity = 'INFO') => {
  * Log failed authentication attempts
  * @param {Object} details Auth failure details
  */
-const logAuthFailure = async (details) => {
-  await logSecurityEvent('AuthFailure', {
-    ...details,
-    timestamp: new Date().toISOString()
-  }, 'WARN');
+const logAuthFailure = async details => {
+  await logSecurityEvent(
+    'AuthFailure',
+    {
+      ...details,
+      timestamp: new Date().toISOString(),
+    },
+    'WARN'
+  );
 };
 
 /**
@@ -75,11 +80,15 @@ const logAuthFailure = async (details) => {
  * @param {boolean} success Whether refresh was successful
  */
 const logTokenRefresh = async (details, success = true) => {
-  await logSecurityEvent('TokenRefresh', {
-    ...details,
-    success,
-    timestamp: new Date().toISOString()
-  }, success ? 'INFO' : 'WARN');
+  await logSecurityEvent(
+    'TokenRefresh',
+    {
+      ...details,
+      success,
+      timestamp: new Date().toISOString(),
+    },
+    success ? 'INFO' : 'WARN'
+  );
 };
 
 /**
@@ -90,20 +99,20 @@ const logTokenRefresh = async (details, success = true) => {
 const logOAuthActivity = async (details, success = true) => {
   // Default to info level for successful events, warn for failures
   const logLevel = success ? 'info' : 'warn';
-  
+
   // Log to console first
   console[logLevel]('OAuth Activity:', JSON.stringify(details, null, 2));
-  
+
   // Store in mock logs for development
   if (useMockData) {
     mockLogs.push({
       type: 'oauth_activity',
       timestamp: new Date().toISOString(),
       success,
-      data: details
+      data: details,
     });
   }
-  
+
   // In production, log to CloudWatch
   if (cloudwatch && process.env.NODE_ENV === 'production') {
     try {
@@ -114,20 +123,20 @@ const logOAuthActivity = async (details, success = true) => {
             Dimensions: [
               {
                 Name: 'Action',
-                Value: details.action || 'unknown'
+                Value: details.action || 'unknown',
               },
               {
                 Name: 'Success',
-                Value: success ? 'true' : 'false'
-              }
+                Value: success ? 'true' : 'false',
+              },
             ],
             Unit: 'Count',
-            Value: 1
-          }
+            Value: 1,
+          },
         ],
-        Namespace: 'JoyLabs/Security'
+        Namespace: 'JoyLabs/Security',
       });
-      
+
       await cloudwatch.send(command);
     } catch (error) {
       console.error('Error logging to CloudWatch:', error);
@@ -141,11 +150,15 @@ const logOAuthActivity = async (details, success = true) => {
  * @param {boolean} success Whether revocation was successful
  */
 const logTokenRevocation = async (details, success = true) => {
-  await logSecurityEvent('TokenRevocation', {
-    ...details,
-    success,
-    timestamp: new Date().toISOString()
-  }, success ? 'INFO' : 'WARN');
+  await logSecurityEvent(
+    'TokenRevocation',
+    {
+      ...details,
+      success,
+      timestamp: new Date().toISOString(),
+    },
+    success ? 'INFO' : 'WARN'
+  );
 };
 
 /**
@@ -155,7 +168,7 @@ function getMockLogs() {
   if (process.env.NODE_ENV === 'production') {
     return { error: 'Not available in production' };
   }
-  
+
   return mockLogs;
 }
 
@@ -165,5 +178,5 @@ module.exports = {
   logTokenRefresh,
   logOAuthActivity,
   logTokenRevocation,
-  getMockLogs
-}; 
+  getMockLogs,
+};

@@ -10,15 +10,17 @@ const allowedOrigins = [
   'joylabs://',
   'exp://',
   // Development origins
-  ...(process.env.NODE_ENV !== 'production' ? [
-    'http://localhost:3000',
-    'http://localhost:19006',
-    'http://localhost:19000',
-    'http://localhost:19001',
-    'http://127.0.0.1:3000',
-    'exp://localhost:19000',
-    'exp://127.0.0.1:19000'
-  ] : [])
+  ...(process.env.NODE_ENV !== 'production'
+    ? [
+        'http://localhost:3000',
+        'http://localhost:19006',
+        'http://localhost:19000',
+        'http://localhost:19001',
+        'http://127.0.0.1:3000',
+        'exp://localhost:19000',
+        'exp://127.0.0.1:19000',
+      ]
+    : []),
 ].filter(Boolean);
 
 // Enhanced CORS middleware for both web and Expo AuthSession
@@ -34,9 +36,7 @@ const configureCors = () => {
       console.log('Incoming request origin:', origin);
 
       // Check if the origin starts with any allowed origin
-      const isAllowed = allowedOrigins.some(allowed => 
-        origin.startsWith(allowed)
-      );
+      const isAllowed = allowedOrigins.some(allowed => origin.startsWith(allowed));
 
       if (isAllowed) {
         console.log(`Origin ${origin} is allowed`);
@@ -55,13 +55,13 @@ const configureCors = () => {
       'Origin',
       'User-Agent',
       'Cookie',
-      'Square-Signature'
+      'Square-Signature',
     ],
     exposedHeaders: ['Set-Cookie'],
     credentials: true,
     maxAge: 86400, // 24 hours
     preflightContinue: false,
-    optionsSuccessStatus: 204
+    optionsSuccessStatus: 204,
   });
 };
 
@@ -74,25 +74,24 @@ const authCors = () => {
         path: req.path,
         method: req.method,
         origin: req.headers.origin || 'No origin',
-        host: req.headers.host
+        host: req.headers.host,
       });
 
       const origin = req.headers.origin;
 
       // For Expo AuthSession requests, allow the origin
-      if (origin && (
-        origin.startsWith('https://auth.expo.io') ||
-        origin.startsWith('exp://') ||
-        origin.startsWith('joylabs://')
-      )) {
+      if (
+        origin &&
+        (origin.startsWith('https://auth.expo.io') ||
+          origin.startsWith('exp://') ||
+          origin.startsWith('joylabs://'))
+      ) {
         console.log(`Expo AuthSession origin detected: ${origin}`);
         res.header('Access-Control-Allow-Origin', origin);
       } else {
         // For other origins, check against allowedOrigins
-        const isAllowed = allowedOrigins.some(allowed => 
-          origin && origin.startsWith(allowed)
-        );
-        
+        const isAllowed = allowedOrigins.some(allowed => origin && origin.startsWith(allowed));
+
         if (isAllowed) {
           res.header('Access-Control-Allow-Origin', origin);
         } else {
@@ -104,7 +103,8 @@ const authCors = () => {
       // Set other CORS headers
       res.header('Access-Control-Allow-Credentials', 'true');
       res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.header('Access-Control-Allow-Headers', 
+      res.header(
+        'Access-Control-Allow-Headers',
         'Content-Type, Authorization, X-Requested-With, Accept, User-Agent, Origin, Cookie, Square-Signature'
       );
       res.header('Access-Control-Expose-Headers', 'Set-Cookie');
@@ -125,4 +125,4 @@ const authCors = () => {
 };
 
 module.exports = configureCors;
-module.exports.authCors = authCors; 
+module.exports.authCors = authCors;

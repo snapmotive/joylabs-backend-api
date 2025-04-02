@@ -21,7 +21,7 @@ const getDynamoDb = () => {
     const client = new DynamoDBClient({
       maxAttempts: 3,
       requestTimeout: 3000,
-      region: process.env.AWS_REGION
+      region: process.env.AWS_REGION,
     });
     dynamoDbClient = DynamoDBDocumentClient.from(client);
   }
@@ -38,13 +38,16 @@ app.use(cookieParser());
 
 // Session middleware
 const sessionConfig = {
-  store: process.env.NODE_ENV === 'production' ? new DynamoDBStore({
-    table: 'joylabs-sessions',
-    AWSConfigJSON: {
-      region: 'us-west-1'
-    },
-    reapInterval: 24 * 60 * 60 * 1000 // Cleanup expired sessions every 24 hours
-  }) : null,
+  store:
+    process.env.NODE_ENV === 'production'
+      ? new DynamoDBStore({
+          table: 'joylabs-sessions',
+          AWSConfigJSON: {
+            region: 'us-west-1',
+          },
+          reapInterval: 24 * 60 * 60 * 1000, // Cleanup expired sessions every 24 hours
+        })
+      : null,
   secret: process.env.SESSION_SECRET || 'joylabs-session-secret-key-production',
   resave: false,
   saveUninitialized: false,
@@ -52,8 +55,8 @@ const sessionConfig = {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  },
 };
 
 app.use(session(sessionConfig));
@@ -90,17 +93,17 @@ const catalogRoutes = require('./routes/catalog');
 // Performance monitoring middleware
 app.use((req, res, next) => {
   req.startTime = Date.now();
-  
+
   // Track response time after request completes
   res.on('finish', () => {
     const duration = Date.now() - req.startTime;
-    
+
     // Log slow requests (over 500ms)
     if (duration > 500) {
       console.warn(`Slow request: ${req.method} ${req.originalUrl} took ${duration}ms`);
     }
   });
-  
+
   next();
 });
 
@@ -118,7 +121,7 @@ app.use((req, res, next) => {
     path: req.path,
     headers: req.headers,
     body: req.body,
-    query: req.query
+    query: req.query,
   });
   next();
 });
@@ -129,7 +132,7 @@ app.post('/api/auth/register-state', async (req, res) => {
     headers: req.headers,
     body: req.body,
     tableName: STATES_TABLE,
-    region: process.env.AWS_REGION
+    region: process.env.AWS_REGION,
   });
 
   try {
@@ -138,17 +141,17 @@ app.post('/api/auth/register-state', async (req, res) => {
     if (!state) {
       console.error('Missing state parameter');
       return res.status(400).json({
-        error: 'Missing state parameter'
+        error: 'Missing state parameter',
       });
     }
 
     console.log('Preparing to store state in DynamoDB:', {
       state: state.substring(0, 5) + '...' + state.substring(state.length - 5),
-      tableName: STATES_TABLE
+      tableName: STATES_TABLE,
     });
 
     // Store state in DynamoDB with 10-minute TTL
-    const ttl = Math.floor(Date.now() / 1000) + (10 * 60); // Current time + 10 minutes in seconds
+    const ttl = Math.floor(Date.now() / 1000) + 10 * 60; // Current time + 10 minutes in seconds
     const params = {
       TableName: STATES_TABLE,
       Item: {
@@ -156,32 +159,36 @@ app.post('/api/auth/register-state', async (req, res) => {
         timestamp: Date.now(),
         used: false,
         ttl: ttl,
-        redirectUrl: req.body.redirectUrl || '/auth/success'
-      }
+        redirectUrl: req.body.redirectUrl || '/auth/success',
+      },
     };
 
     console.log('Sending PutCommand to DynamoDB with params:', {
       TableName: params.TableName,
       Item: {
         ...params.Item,
-        state: params.Item.state.substring(0, 5) + '...' + params.Item.state.substring(params.Item.state.length - 5)
-      }
+        state:
+          params.Item.state.substring(0, 5) +
+          '...' +
+          params.Item.state.substring(params.Item.state.length - 5),
+      },
     });
 
     const dynamoDb = getDynamoDb();
     const result = await dynamoDb.send(new PutCommand(params));
-    
+
     console.log('DynamoDB PutCommand result:', {
       statusCode: result.$metadata.httpStatusCode,
-      requestId: result.$metadata.requestId
+      requestId: result.$metadata.requestId,
     });
 
-    console.log(`State parameter '${state.substring(0, 5)}...${state.substring(state.length - 5)}' registered successfully`);
+    console.log(
+      `State parameter '${state.substring(0, 5)}...${state.substring(state.length - 5)}' registered successfully`
+    );
     return res.status(200).json({
       success: true,
-      message: 'State parameter registered successfully'
+      message: 'State parameter registered successfully',
     });
-
   } catch (error) {
     console.error('Error registering state parameter:', {
       error: error.message,
@@ -189,11 +196,11 @@ app.post('/api/auth/register-state', async (req, res) => {
       name: error.name,
       stack: error.stack,
       region: process.env.AWS_REGION,
-      tableName: STATES_TABLE
+      tableName: STATES_TABLE,
     });
     return res.status(500).json({
       error: 'Failed to register state parameter',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });
@@ -208,16 +215,16 @@ app.options('*', configureCors());
 
 // Home route
 app.get('/', (req, res) => {
-  res.json({ 
-    message: 'Welcome to the JoyLabs API', 
+  res.json({
+    message: 'Welcome to the JoyLabs API',
     links: {
       health: '/api/health',
       test: '/api/test',
       products: '/api/products',
       categories: '/api/categories',
       auth: '/api/auth',
-      catalog: '/api/catalog'
-    }
+      catalog: '/api/catalog',
+    },
   });
 });
 
@@ -225,7 +232,7 @@ app.get('/', (req, res) => {
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(err.status || 500).json({
-    error: err.message || 'Internal server error'
+    error: err.message || 'Internal server error',
   });
 });
 

@@ -1,6 +1,6 @@
 /**
  * Square API Helper Utilities
- * 
+ *
  * Contains functions for improved error handling, retry logic, and rate limiting
  * based on Square best practices.
  */
@@ -9,11 +9,11 @@ const rateLimiter = require('./apiRateLimiter');
 
 // Default retry configuration based on Square recommendations
 const DEFAULT_RETRY_CONFIG = {
-  numberOfRetries: 3,              // How many times to retry a request
-  backoffFactor: 2,                // Exponential backoff factor (doubles wait time)
-  retryInterval: 1000,             // Initial wait time in ms (1 second)
-  maxRetryWaitTime: 60000,         // Maximum wait time between retries (60 seconds)
-  statusCodesToRetry: [429, 500, 503] // Square API status codes to retry
+  numberOfRetries: 3, // How many times to retry a request
+  backoffFactor: 2, // Exponential backoff factor (doubles wait time)
+  retryInterval: 1000, // Initial wait time in ms (1 second)
+  maxRetryWaitTime: 60000, // Maximum wait time between retries (60 seconds)
+  statusCodesToRetry: [429, 500, 503], // Square API status codes to retry
 };
 
 // Cache for webhook signature key to avoid repeated retrieval
@@ -23,7 +23,7 @@ const WEBHOOK_SIG_KEY_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Execute a Square API request with automatic retries and exponential backoff
- * 
+ *
  * @param {Function} requestFn - Function that takes a Square client and returns a promise
  * @param {Object} client - Square client instance
  * @param {Object} options - Optional configuration for retries
@@ -38,62 +38,62 @@ async function executeWithRetry(requestFn, client, options = {}) {
     useRateLimiter: true,
     endpoint: 'square-api',
     cost: 1,
-    ...options
+    ...options,
   };
-  
+
   let retries = 0;
   let lastError = null;
   let waitTime = config.retryInterval;
-  
+
   // Apply rate limiting if enabled
   if (config.useRateLimiter) {
     await rateLimiter.acquire(config.endpoint, config.cost);
   }
-  
+
   while (retries <= config.numberOfRetries) {
     try {
       // If this isn't the first attempt, log that we're retrying
       if (retries > 0) {
         console.log(`Retry attempt ${retries}/${config.numberOfRetries} after ${waitTime}ms`);
       }
-      
+
       // Execute the request function with the Square client
       return await requestFn(client);
     } catch (error) {
       lastError = error;
-      
+
       // Determine if we should retry based on the error type
       const shouldRetry = shouldRetryRequest(error, config);
-      
+
       if (!shouldRetry || retries >= config.numberOfRetries) {
         // Log the final error with details
         logApiError(error, retries);
         throw enhanceError(error);
       }
-      
+
       // Calculate wait time for next retry with exponential backoff
       waitTime = calculateBackoff(retries, error, config);
-      
+
       // Log the error and that we're going to retry
       console.warn(`Square API error (will retry): ${error.message}`, {
         statusCode: error.statusCode || error.response?.status,
         retryAttempt: retries + 1,
-        waitTime
+        waitTime,
       });
-      
+
       // Wait before next retry
       await sleep(waitTime);
-      
+
       // Increment retry counter
       retries++;
-      
+
       // Check rate limiter before retry if enabled
       if (config.useRateLimiter) {
         await rateLimiter.acquire(config.endpoint, config.cost);
       }
     }
   }
-  
+
   // We should never reach here due to the throw in the catch block
   // But just in case, throw the last error
   throw lastError;
@@ -106,46 +106,46 @@ async function executeWithRetry(requestFn, client, options = {}) {
 function configureRateLimits() {
   // Configure rate limits for different endpoint categories
   // based on Square's documented limits
-  
+
   // Catalog API has a limit of 20 requests per second
   rateLimiter.configureBucket('catalog-api', {
-    tokensPerInterval: 15,  // Be conservative
-    intervalMs: 1000,       // 1 second
-    bucketSize: 30
+    tokensPerInterval: 15, // Be conservative
+    intervalMs: 1000, // 1 second
+    bucketSize: 30,
   });
-  
+
   // Customers API has a limit of 20 requests per second
   rateLimiter.configureBucket('customers-api', {
-    tokensPerInterval: 15, 
+    tokensPerInterval: 15,
     intervalMs: 1000,
-    bucketSize: 30
+    bucketSize: 30,
   });
-  
+
   // Orders API has a limit of 15 requests per second
   rateLimiter.configureBucket('orders-api', {
-    tokensPerInterval: 10,  // Be conservative
+    tokensPerInterval: 10, // Be conservative
     intervalMs: 1000,
-    bucketSize: 25
+    bucketSize: 25,
   });
-  
+
   // OAuth token endpoints are more restrictive
   rateLimiter.configureBucket('oauth-api', {
     tokensPerInterval: 5,
     intervalMs: 1000,
-    bucketSize: 10
+    bucketSize: 10,
   });
-  
+
   // Default bucket for other APIs
   rateLimiter.configureBucket('square-api', {
     tokensPerInterval: 10,
     intervalMs: 1000,
-    bucketSize: 20
+    bucketSize: 20,
   });
 }
 
 /**
  * Determine if a request should be retried based on the error type
- * 
+ *
  * @param {Error} error - The error from a Square API request
  * @param {Object} config - Retry configuration
  * @returns {boolean} - Whether the request should be retried
@@ -153,33 +153,35 @@ function configureRateLimits() {
 function shouldRetryRequest(error, config) {
   // Get status code from different possible locations
   const statusCode = error.statusCode || error.response?.status;
-  
+
   // Check if it's a rate limit error (429)
   if (statusCode === 429) {
     return true;
   }
-  
+
   // Check if it's another retriable status code
   if (config.statusCodesToRetry.includes(statusCode)) {
     return true;
   }
-  
+
   // Check for network errors which may be transient
-  if (error.code === 'ECONNRESET' || 
-      error.code === 'ETIMEDOUT' || 
-      error.code === 'ECONNREFUSED' ||
-      error.message.includes('network') ||
-      error.message.includes('timeout')) {
+  if (
+    error.code === 'ECONNRESET' ||
+    error.code === 'ETIMEDOUT' ||
+    error.code === 'ECONNREFUSED' ||
+    error.message.includes('network') ||
+    error.message.includes('timeout')
+  ) {
     return true;
   }
-  
+
   // Don't retry other types of errors
   return false;
 }
 
 /**
  * Calculate the backoff time for a retry
- * 
+ *
  * @param {number} retryCount - The current retry count
  * @param {Error} error - The error from a Square API request
  * @param {Object} config - Retry configuration
@@ -188,10 +190,10 @@ function shouldRetryRequest(error, config) {
 function calculateBackoff(retryCount, error, config) {
   // Start with the base retry interval
   let waitTime = config.retryInterval;
-  
+
   // Apply exponential backoff
   waitTime = waitTime * Math.pow(config.backoffFactor, retryCount);
-  
+
   // If it's a rate limit error with a Retry-After header, use that value
   if (error.statusCode === 429 && error.response?.headers?.['retry-after']) {
     const retryAfterSec = parseInt(error.response.headers['retry-after'], 10);
@@ -201,14 +203,14 @@ function calculateBackoff(retryCount, error, config) {
       waitTime = Math.max(waitTime, retryAfterMs);
     }
   }
-  
+
   // Ensure we don't exceed the maximum wait time
   return Math.min(waitTime, config.maxRetryWaitTime);
 }
 
 /**
  * Enhance error object with additional context
- * 
+ *
  * @param {Error} error - The error from a Square API request
  * @returns {Error} - Enhanced error with additional properties
  */
@@ -217,7 +219,7 @@ function enhanceError(error) {
   if (error.statusCode) {
     return error;
   }
-  
+
   // Add statusCode from response if available
   if (error.response && error.response.status) {
     error.statusCode = error.response.status;
@@ -225,7 +227,7 @@ function enhanceError(error) {
     // Default status code for unknown errors
     error.statusCode = 500;
   }
-  
+
   // Add error code if missing
   if (!error.code) {
     if (error.statusCode === 429) {
@@ -240,13 +242,13 @@ function enhanceError(error) {
       error.code = 'UNKNOWN_ERROR';
     }
   }
-  
+
   return error;
 }
 
 /**
  * Log details about a Square API error
- * 
+ *
  * @param {Error} error - The error from a Square API request
  * @param {number} retries - Number of retries attempted
  */
@@ -256,13 +258,13 @@ function logApiError(error, retries) {
     code: error.code || error.statusCode || 'UNKNOWN_ERROR',
     statusCode: error.statusCode || error.response?.status || 500,
     details: error.details || error.errors || [],
-    retries: retries || 0
+    retries: retries || 0,
   });
 }
 
 /**
  * Helper to create a delay
- * 
+ *
  * @param {number} ms - Milliseconds to sleep
  * @returns {Promise} - Promise that resolves after the specified time
  */
@@ -273,22 +275,22 @@ function sleep(ms) {
 /**
  * Get the webhook signature key from cache or retrieve it
  * This optimizes the webhook verification process by caching the key
- * 
+ *
  * @param {Function} getCredentialsFn - Function to get credentials when needed
  * @returns {Promise<string>} - The webhook signature key
  */
 async function getWebhookSignatureKey(getCredentialsFn) {
   const now = Date.now();
-  
+
   // Return from cache if still valid
   if (webhookSignatureKey && now < webhookSignatureKeyExpiryTime) {
     return webhookSignatureKey;
   }
-  
+
   // Get fresh credentials
   try {
     const credentials = await getCredentialsFn();
-    
+
     // Cache the signature key if present
     if (credentials && credentials.webhookSignatureKey) {
       webhookSignatureKey = credentials.webhookSignatureKey;
@@ -298,7 +300,7 @@ async function getWebhookSignatureKey(getCredentialsFn) {
       console.warn('No webhook signature key found in credentials');
       webhookSignatureKey = null;
     }
-    
+
     return webhookSignatureKey;
   } catch (error) {
     console.error('Error retrieving webhook signature key:', error);
@@ -317,5 +319,5 @@ module.exports = {
   enhanceError,
   logApiError,
   sleep,
-  getWebhookSignatureKey
-}; 
+  getWebhookSignatureKey,
+};

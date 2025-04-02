@@ -26,11 +26,11 @@ const categoriesController = {
   async getCategoryById(req, res, next) {
     try {
       const category = await CategoryService.getById(req.params.id);
-      
+
       if (!category) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Category not found' 
+        return res.status(404).json({
+          success: false,
+          error: 'Category not found',
         });
       }
 
@@ -48,11 +48,11 @@ const categoriesController = {
     try {
       // Validate request body
       const { error, value } = validate(req.body, categorySchema.create);
-      
+
       if (error) {
-        return res.status(400).json({ 
-          success: false, 
-          error: error.details[0].message 
+        return res.status(400).json({
+          success: false,
+          error: error.details[0].message,
         });
       }
 
@@ -63,7 +63,7 @@ const categoriesController = {
         if (error.message === 'Category with this name already exists') {
           return res.status(400).json({
             success: false,
-            error: error.message
+            error: error.message,
           });
         }
         throw error;
@@ -81,21 +81,21 @@ const categoriesController = {
     try {
       // Validate request body
       const { error, value } = validate(req.body, categorySchema.update);
-      
+
       if (error) {
-        return res.status(400).json({ 
-          success: false, 
-          error: error.details[0].message 
+        return res.status(400).json({
+          success: false,
+          error: error.details[0].message,
         });
       }
 
       // Check if category exists
       const category = await CategoryService.getById(req.params.id);
-      
+
       if (!category) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Category not found' 
+        return res.status(404).json({
+          success: false,
+          error: 'Category not found',
         });
       }
 
@@ -105,7 +105,7 @@ const categoriesController = {
         if (existingCategory && existingCategory.id !== req.params.id) {
           return res.status(400).json({
             success: false,
-            error: 'Category with this name already exists'
+            error: 'Category with this name already exists',
           });
         }
       }
@@ -125,11 +125,11 @@ const categoriesController = {
     try {
       // Check if category exists
       const category = await CategoryService.getById(req.params.id);
-      
+
       if (!category) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Category not found' 
+        return res.status(404).json({
+          success: false,
+          error: 'Category not found',
         });
       }
 
@@ -138,7 +138,7 @@ const categoriesController = {
     } catch (error) {
       next(error);
     }
-  }
+  },
 };
 
-module.exports = categoriesController; 
+module.exports = categoriesController;

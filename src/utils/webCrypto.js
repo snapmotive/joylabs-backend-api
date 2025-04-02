@@ -28,10 +28,10 @@ async function generateCodeChallenge(codeVerifier) {
   // Encode the verifier as UTF-8
   const encoder = new TextEncoder();
   const data = encoder.encode(codeVerifier);
-  
+
   // Hash using SHA-256
   const digest = await webcrypto.subtle.digest('SHA-256', data);
-  
+
   // Convert to base64url
   return base64URLEncode(new Uint8Array(digest));
 }
@@ -44,12 +44,9 @@ async function generateCodeChallenge(codeVerifier) {
 function base64URLEncode(buffer) {
   // Convert buffer to base64 (Node.js doesn't have btoa)
   const base64 = Buffer.from(buffer).toString('base64');
-  
+
   // Make base64 URL-safe
-  return base64
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 /**
@@ -67,10 +64,7 @@ function generateCodeVerifierLegacy() {
  * @returns {string} URL-safe base64 string
  */
 function base64URLEncodeLegacy(buffer) {
-  return buffer.toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 /**
@@ -79,9 +73,7 @@ function base64URLEncodeLegacy(buffer) {
  * @returns {string} The code challenge
  */
 function generateCodeChallengeLegacy(verifier) {
-  const hash = crypto.createHash('sha256')
-    .update(verifier)
-    .digest();
+  const hash = crypto.createHash('sha256').update(verifier).digest();
   return base64URLEncodeLegacy(hash);
 }
 
@@ -90,9 +82,9 @@ module.exports = {
   generateCodeVerifier,
   generateCodeChallenge,
   base64URLEncode,
-  
+
   // Legacy compatibility methods
   generateCodeVerifierLegacy,
   generateCodeChallengeLegacy,
-  base64URLEncodeLegacy
-}; 
+  base64URLEncodeLegacy,
+};

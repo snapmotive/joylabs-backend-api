@@ -17,7 +17,7 @@ const getSecretsManager = () => {
   if (!secretsManagerClient) {
     secretsManagerClient = new SecretsManagerClient({
       maxAttempts: 3,
-      requestTimeout: 3000
+      requestTimeout: 3000,
     });
   }
   return secretsManagerClient;
@@ -28,16 +28,16 @@ const getSecretsManager = () => {
  * @param {string} secretName - The name of the secret to retrieve
  * @returns {Promise<string>} - The secret value
  */
-const getSecret = async (secretName) => {
+const getSecret = async secretName => {
   try {
     const secretsManager = getSecretsManager();
     const command = new GetSecretValueCommand({ SecretId: secretName });
     const response = await secretsManager.send(command);
-    
+
     if (!response.SecretString) {
       throw new Error('No SecretString found in AWS Secrets Manager response');
     }
-    
+
     return response.SecretString;
   } catch (error) {
     console.error('Error retrieving secret:', error);
@@ -53,7 +53,7 @@ const getDynamoDb = () => {
   if (!dynamoDbClient) {
     const client = new DynamoDBClient({
       maxAttempts: 3,
-      requestTimeout: 3000
+      requestTimeout: 3000,
     });
     dynamoDbClient = DynamoDBDocumentClient.from(client);
   }
@@ -63,5 +63,5 @@ const getDynamoDb = () => {
 module.exports = {
   getSecretsManager,
   getSecret,
-  getDynamoDb
-}; 
+  getDynamoDb,
+};

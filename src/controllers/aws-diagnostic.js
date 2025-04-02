@@ -11,7 +11,7 @@ async function runAwsDiagnostic(req, res) {
     const results = {
       timestamp: new Date().toISOString(),
       region: process.env.AWS_REGION,
-      tests: {}
+      tests: {},
     };
 
     // Test IAM Credentials
@@ -23,40 +23,43 @@ async function runAwsDiagnostic(req, res) {
         message: 'AWS credentials are valid',
         account: identity.Account,
         userId: identity.UserId,
-        arn: identity.Arn
+        arn: identity.Arn,
       };
     } catch (error) {
       results.tests.credentials = {
         status: 'error',
-        message: `AWS credentials test failed: ${error.message}`
+        message: `AWS credentials test failed: ${error.message}`,
       };
     }
 
-    // Test DynamoDB 
+    // Test DynamoDB
     try {
       const dynamoDb = new DynamoDBClient({ region: process.env.AWS_REGION });
       const tables = await dynamoDb.send(new ListTablesCommand({}));
-      
+
       const requiredTables = [
         process.env.PRODUCTS_TABLE,
         process.env.CATEGORIES_TABLE,
-        process.env.USERS_TABLE
+        process.env.USERS_TABLE,
       ];
-      
+
       const existingTables = tables.TableNames;
       const missingTables = requiredTables.filter(table => !existingTables.includes(table));
-      
+
       results.tests.dynamodb = {
         status: missingTables.length === 0 ? 'success' : 'warning',
-        message: missingTables.length === 0 ? 'All required DynamoDB tables exist' : 'Some required tables are missing',
+        message:
+          missingTables.length === 0
+            ? 'All required DynamoDB tables exist'
+            : 'Some required tables are missing',
         totalTables: existingTables.length,
         availableTables: existingTables,
-        missingTables: missingTables
+        missingTables: missingTables,
       };
     } catch (error) {
       results.tests.dynamodb = {
         status: 'error',
-        message: `DynamoDB test failed: ${error.message}`
+        message: `DynamoDB test failed: ${error.message}`,
       };
     }
 
@@ -64,28 +67,29 @@ async function runAwsDiagnostic(req, res) {
     try {
       const lambda = new LambdaClient({ region: process.env.AWS_REGION });
       const functions = await lambda.send(new ListFunctionsCommand({}));
-      
+
       const serviceName = 'joylabs-backend-api';
-      const serviceFunctions = functions.Functions.filter(fn => 
+      const serviceFunctions = functions.Functions.filter(fn =>
         fn.FunctionName.includes(serviceName)
       );
-      
+
       results.tests.lambda = {
         status: 'info',
-        message: serviceFunctions.length > 0 
-          ? `Found ${serviceFunctions.length} related Lambda functions` 
-          : 'No deployed Lambda functions found for this service',
+        message:
+          serviceFunctions.length > 0
+            ? `Found ${serviceFunctions.length} related Lambda functions`
+            : 'No deployed Lambda functions found for this service',
         functions: serviceFunctions.map(fn => ({
           name: fn.FunctionName,
           runtime: fn.Runtime,
           memory: fn.MemorySize,
-          timeout: fn.Timeout
-        }))
+          timeout: fn.Timeout,
+        })),
       };
     } catch (error) {
       results.tests.lambda = {
         status: 'error',
-        message: `Lambda test failed: ${error.message}`
+        message: `Lambda test failed: ${error.message}`,
       };
     }
 
@@ -93,33 +97,32 @@ async function runAwsDiagnostic(req, res) {
     try {
       const apiGateway = new APIGatewayClient({ region: process.env.AWS_REGION });
       const apis = await apiGateway.send(new GetRestApisCommand({}));
-      
+
       const serviceName = 'joylabs-backend-api';
-      const serviceApis = apis.items.filter(api => 
-        api.name.includes(serviceName)
-      );
-      
+      const serviceApis = apis.items.filter(api => api.name.includes(serviceName));
+
       results.tests.apiGateway = {
         status: 'info',
-        message: serviceApis.length > 0 
-          ? `Found ${serviceApis.length} related API Gateway APIs` 
-          : 'No deployed API Gateway APIs found for this service',
+        message:
+          serviceApis.length > 0
+            ? `Found ${serviceApis.length} related API Gateway APIs`
+            : 'No deployed API Gateway APIs found for this service',
         apis: serviceApis.map(api => ({
           id: api.id,
           name: api.name,
           endpoint: `https://${api.id}.execute-api.${process.env.AWS_REGION}.amazonaws.com/production`,
-          createdDate: api.createdDate
-        }))
+          createdDate: api.createdDate,
+        })),
       };
     } catch (error) {
       results.tests.apiGateway = {
         status: 'error',
-        message: `API Gateway test failed: ${error.message}`
+        message: `API Gateway test failed: ${error.message}`,
       };
     }
 
     const baseUrl = process.env.API_PROD_URL || req.protocol + '://' + req.get('host');
-    
+
     const format = req.query.format || 'html';
     if (format === 'json') {
       return res.json(results);
@@ -251,7 +254,9 @@ async function runAwsDiagnostic(req, res) {
                 ${results.tests.credentials.status}
               </span>
             </div>
-            ${results.tests.credentials.status === 'success' ? `
+            ${
+              results.tests.credentials.status === 'success'
+                ? `
               <table>
                 <tr>
                   <th>AWS Account</th>
@@ -266,7 +271,9 @@ async function runAwsDiagnostic(req, res) {
                   <td class="mono">${results.tests.credentials.arn}</td>
                 </tr>
               </table>
-            ` : ''}
+            `
+                : ''
+            }
           </div>
 
           <div class="card">
@@ -279,18 +286,26 @@ async function runAwsDiagnostic(req, res) {
                 ${results.tests.dynamodb.status}
               </span>
             </div>
-            ${results.tests.dynamodb.status !== 'error' ? `
+            ${
+              results.tests.dynamodb.status !== 'error'
+                ? `
               <p>Found ${results.tests.dynamodb.totalTables} tables in this region:</p>
               <div class="mono">
                 ${results.tests.dynamodb.availableTables.join(', ')}
               </div>
-              ${results.tests.dynamodb.missingTables.length > 0 ? `
+              ${
+                results.tests.dynamodb.missingTables.length > 0
+                  ? `
                 <p class="warning">Missing required tables:</p>
                 <div class="mono">
                   ${results.tests.dynamodb.missingTables.join(', ')}
                 </div>
-              ` : ''}
-            ` : ''}
+              `
+                  : ''
+              }
+            `
+                : ''
+            }
           </div>
           
           <div class="card">
@@ -303,7 +318,9 @@ async function runAwsDiagnostic(req, res) {
                 ${results.tests.lambda.status}
               </span>
             </div>
-            ${results.tests.lambda.functions && results.tests.lambda.functions.length > 0 ? `
+            ${
+              results.tests.lambda.functions && results.tests.lambda.functions.length > 0
+                ? `
               <table>
                 <tr>
                   <th>Function Name</th>
@@ -311,18 +328,24 @@ async function runAwsDiagnostic(req, res) {
                   <th>Memory</th>
                   <th>Timeout</th>
                 </tr>
-                ${results.tests.lambda.functions.map(fn => `
+                ${results.tests.lambda.functions
+                  .map(
+                    fn => `
                   <tr>
                     <td>${fn.name}</td>
                     <td>${fn.runtime}</td>
                     <td>${fn.memory} MB</td>
                     <td>${fn.timeout} sec</td>
                   </tr>
-                `).join('')}
+                `
+                  )
+                  .join('')}
               </table>
-            ` : `
+            `
+                : `
               <p>No Lambda functions found for this service</p>
-            `}
+            `
+            }
           </div>
           
           <div class="card">
@@ -335,24 +358,32 @@ async function runAwsDiagnostic(req, res) {
                 ${results.tests.apiGateway.status}
               </span>
             </div>
-            ${results.tests.apiGateway.apis && results.tests.apiGateway.apis.length > 0 ? `
+            ${
+              results.tests.apiGateway.apis && results.tests.apiGateway.apis.length > 0
+                ? `
               <table>
                 <tr>
                   <th>API Name</th>
                   <th>API ID</th>
                   <th>Endpoint URL</th>
                 </tr>
-                ${results.tests.apiGateway.apis.map(api => `
+                ${results.tests.apiGateway.apis
+                  .map(
+                    api => `
                   <tr>
                     <td>${api.name}</td>
                     <td>${api.id}</td>
                     <td class="mono">${api.endpoint}</td>
                   </tr>
-                `).join('')}
+                `
+                  )
+                  .join('')}
               </table>
-            ` : `
+            `
+                : `
               <p>No API Gateway APIs found for this service</p>
-            `}
+            `
+            }
           </div>
           
           <div class="card">
@@ -368,13 +399,13 @@ async function runAwsDiagnostic(req, res) {
     `);
   } catch (error) {
     console.error('Diagnostic test error:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: error.message 
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
     });
   }
 }
 
 module.exports = {
-  runAwsDiagnostic
-}; 
+  runAwsDiagnostic,
+};

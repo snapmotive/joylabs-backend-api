@@ -1,5 +1,11 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+  DeleteCommand,
+} = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
 
@@ -7,7 +13,7 @@ const jwt = require('jsonwebtoken');
 const client = new DynamoDBClient({
   maxAttempts: 3,
   requestTimeout: 3000,
-  region: process.env.AWS_REGION
+  region: process.env.AWS_REGION,
 });
 
 const dynamoDb = DynamoDBDocumentClient.from(client);
@@ -24,7 +30,7 @@ const UserService = {
   async getById(id) {
     const params = {
       TableName: usersTable,
-      Key: { id }
+      Key: { id },
     };
 
     const result = await dynamoDb.send(new GetCommand(params));
@@ -40,12 +46,12 @@ const UserService = {
     const newUser = {
       ...user,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
 
     const params = {
       TableName: usersTable,
-      Item: newUser
+      Item: newUser,
     };
 
     await dynamoDb.send(new PutCommand(params));
@@ -59,16 +65,17 @@ const UserService = {
    */
   async update(id, updates) {
     const timestamp = new Date().toISOString();
-    
+
     // Build update expression and attribute values
     let updateExpression = 'SET updatedAt = :updatedAt';
     const expressionAttributeValues = {
-      ':updatedAt': timestamp
+      ':updatedAt': timestamp,
     };
 
     // Add each update field to the expression
     Object.keys(updates).forEach((key, index) => {
-      if (key !== 'id') { // Don't update the primary key
+      if (key !== 'id') {
+        // Don't update the primary key
         const attributeName = `:attr${index}`;
         updateExpression += `, ${key} = ${attributeName}`;
         expressionAttributeValues[attributeName] = updates[key];
@@ -80,7 +87,7 @@ const UserService = {
       Key: { id },
       UpdateExpression: updateExpression,
       ExpressionAttributeValues: expressionAttributeValues,
-      ReturnValues: 'ALL_NEW'
+      ReturnValues: 'ALL_NEW',
     };
 
     const result = await dynamoDb.send(new UpdateCommand(params));
@@ -94,11 +101,11 @@ const UserService = {
   async delete(id) {
     const params = {
       TableName: usersTable,
-      Key: { id }
+      Key: { id },
     };
 
     return dynamoDb.send(new DeleteCommand(params));
-  }
+  },
 };
 
-module.exports = UserService; 
+module.exports = UserService;

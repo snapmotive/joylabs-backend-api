@@ -3,13 +3,20 @@
  * Provides methods to manage Square catalog item IDs in the local database
  */
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  ScanCommand,
+  UpdateCommand,
+  DeleteCommand,
+} = require('@aws-sdk/lib-dynamodb');
 const uuid = require('uuid');
 
 // Configure DynamoDB client
 const client = new DynamoDBClient({
   maxAttempts: 3,
-  requestTimeout: 3000
+  requestTimeout: 3000,
 });
 const dynamoDb = DynamoDBDocumentClient.from(client);
 
@@ -24,7 +31,7 @@ const tableName = process.env.CATALOG_ITEMS_TABLE || 'joylabs-backend-api-v3-cat
 async function create(data) {
   const timestamp = new Date().toISOString();
   const id = data.id || uuid.v4();
-  
+
   const item = {
     id,
     square_catalog_id: data.square_catalog_id,
@@ -34,16 +41,16 @@ async function create(data) {
     updated_at: timestamp,
     merchant_id: data.merchant_id,
     status: data.status || 'ACTIVE',
-    metadata: data.metadata || {}
+    metadata: data.metadata || {},
   };
-  
+
   const params = {
     TableName: tableName,
-    Item: item
+    Item: item,
   };
-  
+
   console.log(`Creating catalog item reference: ${id}`);
-  
+
   try {
     await dynamoDb.send(new PutCommand(params));
     return item;
@@ -61,11 +68,11 @@ async function create(data) {
 async function findById(id) {
   const params = {
     TableName: tableName,
-    Key: { id }
+    Key: { id },
   };
-  
+
   console.log(`Getting catalog item reference by ID: ${id}`);
-  
+
   try {
     const result = await dynamoDb.send(new GetCommand(params));
     return result.Item || null;
@@ -85,17 +92,20 @@ async function findBySquareCatalogId(squareCatalogId) {
     TableName: tableName,
     FilterExpression: 'square_catalog_id = :squareCatalogId',
     ExpressionAttributeValues: {
-      ':squareCatalogId': squareCatalogId
-    }
+      ':squareCatalogId': squareCatalogId,
+    },
   };
-  
+
   console.log(`Getting catalog item reference by Square catalog ID: ${squareCatalogId}`);
-  
+
   try {
     const result = await dynamoDb.send(new ScanCommand(params));
     return result.Items[0] || null;
   } catch (error) {
-    console.error(`Error getting catalog item reference by Square catalog ID ${squareCatalogId}:`, error);
+    console.error(
+      `Error getting catalog item reference by Square catalog ID ${squareCatalogId}:`,
+      error
+    );
     throw error;
   }
 }
@@ -108,29 +118,29 @@ async function findBySquareCatalogId(squareCatalogId) {
  */
 async function update(id, updates) {
   const timestamp = new Date().toISOString();
-  
+
   let updateExpression = 'SET updated_at = :timestamp';
   const expressionAttributeValues = {
-    ':timestamp': timestamp
+    ':timestamp': timestamp,
   };
-  
+
   Object.keys(updates).forEach(key => {
     if (key !== 'id') {
       updateExpression += `, ${key} = :${key}`;
       expressionAttributeValues[`:${key}`] = updates[key];
     }
   });
-  
+
   const params = {
     TableName: tableName,
     Key: { id },
     UpdateExpression: updateExpression,
     ExpressionAttributeValues: expressionAttributeValues,
-    ReturnValues: 'ALL_NEW'
+    ReturnValues: 'ALL_NEW',
   };
-  
+
   console.log(`Updating catalog item reference: ${id}`);
-  
+
   try {
     const result = await dynamoDb.send(new UpdateCommand(params));
     return result.Attributes;
@@ -148,11 +158,11 @@ async function update(id, updates) {
 async function remove(id) {
   const params = {
     TableName: tableName,
-    Key: { id }
+    Key: { id },
   };
-  
+
   console.log(`Deleting catalog item reference: ${id}`);
-  
+
   try {
     await dynamoDb.send(new DeleteCommand(params));
     return true;
@@ -169,31 +179,31 @@ async function remove(id) {
  */
 async function list(options = {}) {
   const { limit = 100, startKey = null, merchantId = null } = options;
-  
+
   const params = {
     TableName: tableName,
-    Limit: limit
+    Limit: limit,
   };
-  
+
   if (startKey) {
     params.ExclusiveStartKey = { id: startKey };
   }
-  
+
   if (merchantId) {
     params.FilterExpression = 'merchant_id = :merchantId';
     params.ExpressionAttributeValues = {
-      ':merchantId': merchantId
+      ':merchantId': merchantId,
     };
   }
-  
+
   console.log('Listing catalog item references');
-  
+
   try {
     const result = await dynamoDb.send(new ScanCommand(params));
     return {
       items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey,
-      count: result.Count
+      count: result.Count,
     };
   } catch (error) {
     console.error('Error listing catalog item references:', error);
@@ -207,5 +217,5 @@ module.exports = {
   findBySquareCatalogId,
   update,
   remove,
-  list
-}; 
+  list,
+};

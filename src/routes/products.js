@@ -6,4 +6,4 @@ router.get('/', (req, res) => {
   res.json({ message: 'Products API is working' });
 });
 
-module.exports = router; 
+module.exports = router;

@@ -17,24 +17,21 @@ const CatalogItem = require('../models/CatalogItem');
 router.get('/list', protect, async (req, res) => {
   try {
     const { page = 1, limit = 20, types = 'ITEM,CATEGORY' } = req.query;
-    
+
     // First, check our database for stored items for this merchant
     const storedItems = await CatalogItem.list({
       merchant_id: req.user.merchantId,
       page: parseInt(page),
-      limit: parseInt(limit)
+      limit: parseInt(limit),
     });
-    
+
     // Then get the items from Square (this will be more comprehensive)
-    const result = await catalogService.listCatalogItems(
-      req.user.squareAccessToken,
-      { 
-        types: types.split(','),
-        page: parseInt(page),
-        limit: parseInt(limit)
-      }
-    );
-    
+    const result = await catalogService.listCatalogItems(req.user.squareAccessToken, {
+      types: types.split(','),
+      page: parseInt(page),
+      limit: parseInt(limit),
+    });
+
     // If we have local data, enrich the Square results
     if (storedItems.items.length > 0) {
       // Create a map of Square catalog IDs to local data
@@ -42,7 +39,7 @@ router.get('/list', protect, async (req, res) => {
         map[item.square_catalog_id] = item;
         return map;
       }, {});
-      
+
       // Enrich the Square results with local data
       if (result.objects) {
         result.objects = result.objects.map(obj => {
@@ -54,22 +51,22 @@ router.get('/list', protect, async (req, res) => {
                 id: localData.id,
                 created_at: localData.created_at,
                 updated_at: localData.updated_at,
-                metadata: localData.metadata
-              }
+                metadata: localData.metadata,
+              },
             };
           }
           return obj;
         });
       }
     }
-    
+
     res.json(result);
   } catch (error) {
     console.error('Error listing catalog items:', error);
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to list catalog items',
-      error: error.details || error.toString()
+      error: error.details || error.toString(),
     });
   }
 });
@@ -82,12 +79,9 @@ router.get('/list', protect, async (req, res) => {
 router.get('/item/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const result = await catalogService.getCatalogItem(
-      req.user.squareAccessToken,
-      id
-    );
-    
+
+    const result = await catalogService.getCatalogItem(req.user.squareAccessToken, id);
+
     // Try to get local data
     try {
       const localData = await CatalogItem.findBySquareCatalogId(id);
@@ -96,20 +90,20 @@ router.get('/item/:id', protect, async (req, res) => {
           id: localData.id,
           created_at: localData.created_at,
           updated_at: localData.updated_at,
-          metadata: localData.metadata
+          metadata: localData.metadata,
         };
       }
     } catch (dbError) {
       console.error('Error retrieving local catalog data:', dbError);
     }
-    
+
     res.json(result);
   } catch (error) {
     console.error(`Error retrieving catalog item ${req.params.id}:`, error);
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to get catalog item',
-      error: error.details || error.toString()
+      error: error.details || error.toString(),
     });
   }
 });
@@ -122,25 +116,25 @@ const validateCatalogItemRequest = validateRequest({
     type: {
       type: 'string',
       required: true,
-      enum: ['ITEM', 'CATEGORY', 'TAX', 'DISCOUNT', 'MODIFIER', 'MODIFIER_LIST', 'IMAGE']
+      enum: ['ITEM', 'CATEGORY', 'TAX', 'DISCOUNT', 'MODIFIER', 'MODIFIER_LIST', 'IMAGE'],
     },
     name: { type: 'string', required: true },
     description: { type: 'string' },
     abbreviation: { type: 'string' },
     categoryId: { type: 'string' },
     variations: { type: 'array' },
-    productType: { 
+    productType: {
       type: 'string',
-      enum: ['REGULAR', 'APPOINTMENTS_SERVICE']
+      enum: ['REGULAR', 'APPOINTMENTS_SERVICE'],
     },
     // Tax specific fields
     calculationPhase: {
       type: 'string',
-      enum: ['TAX_SUBTOTAL_PHASE', 'TAX_TOTAL_PHASE']
+      enum: ['TAX_SUBTOTAL_PHASE', 'TAX_TOTAL_PHASE'],
     },
     inclusionType: {
       type: 'string',
-      enum: ['ADDITIVE', 'INCLUSIVE']
+      enum: ['ADDITIVE', 'INCLUSIVE'],
     },
     percentage: { type: 'string' },
     appliesToCustomAmounts: { type: 'boolean' },
@@ -148,21 +142,21 @@ const validateCatalogItemRequest = validateRequest({
     // Discount specific fields
     discountType: {
       type: 'string',
-      enum: ['FIXED_PERCENTAGE', 'FIXED_AMOUNT', 'VARIABLE_PERCENTAGE', 'VARIABLE_AMOUNT']
+      enum: ['FIXED_PERCENTAGE', 'FIXED_AMOUNT', 'VARIABLE_PERCENTAGE', 'VARIABLE_AMOUNT'],
     },
-    amountMoney: { 
+    amountMoney: {
       type: 'object',
       properties: {
         amount: { type: 'number' },
-        currency: { type: 'string' }
-      }
+        currency: { type: 'string' },
+      },
     },
     pinRequired: { type: 'boolean' },
     labelColor: { type: 'string' },
     // Modifier list specific fields
     selectionType: {
       type: 'string',
-      enum: ['SINGLE', 'MULTIPLE']
+      enum: ['SINGLE', 'MULTIPLE'],
     },
     modifiers: { type: 'array' },
     // Image specific fields
@@ -170,8 +164,8 @@ const validateCatalogItemRequest = validateRequest({
     caption: { type: 'string' },
     // Common fields
     imageIds: { type: 'array' },
-    idempotencyKey: { type: 'string' }
-  }
+    idempotencyKey: { type: 'string' },
+  },
 });
 
 /**
@@ -185,14 +179,14 @@ router.post('/item', protect, validateCatalogItemRequest, async (req, res) => {
       req.user.squareAccessToken,
       req.body
     );
-    
+
     res.json(result);
   } catch (error) {
     console.error('Error creating/updating catalog item:', error);
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to create/update catalog item',
-      error: error.details || error.toString()
+      error: error.details || error.toString(),
     });
   }
 });
@@ -205,19 +199,16 @@ router.post('/item', protect, validateCatalogItemRequest, async (req, res) => {
 router.delete('/item/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const result = await catalogService.deleteCatalogItem(
-      req.user.squareAccessToken,
-      id
-    );
-    
+
+    const result = await catalogService.deleteCatalogItem(req.user.squareAccessToken, id);
+
     res.json(result);
   } catch (error) {
     console.error(`Error deleting catalog item ${req.params.id}:`, error);
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to delete catalog item',
-      error: error.details || error.toString()
+      error: error.details || error.toString(),
     });
   }
 });
@@ -231,81 +222,94 @@ router.post('/search', protect, async (req, res) => {
   try {
     console.log('[REQUEST BOUNDARY: CATALOG SEARCH START]');
     console.log('[ROUTES] Received catalog search request:', JSON.stringify(req.body, null, 2));
-    
+
     // Directly handle the empty query case - Defense in depth
-    let searchParams = {...req.body};
-    
+    let searchParams = { ...req.body };
+
     // Check if query is missing or empty
-    if (!searchParams.query || (typeof searchParams.query === 'object' && Object.keys(searchParams.query).length === 0)) {
+    if (
+      !searchParams.query ||
+      (typeof searchParams.query === 'object' && Object.keys(searchParams.query).length === 0)
+    ) {
       console.log('[ROUTES] Empty query detected in handler, using default exact_query');
       searchParams.query = {
         exact_query: {
-          attribute_name: "name",
-          attribute_value: "."  // Use a very common character to match almost everything
-        }
+          attribute_name: 'name',
+          attribute_value: '.', // Use a very common character to match almost everything
+        },
       };
     } else if (searchParams.query.text_query) {
       // Special handling for text_query with incorrect format
       if (searchParams.query.text_query.query !== undefined) {
         // Frontend sent text_query with 'query' field instead of 'keywords' array
         const queryText = searchParams.query.text_query.query;
-        
+
         if (queryText && queryText.trim() !== '') {
           // If there's actual text, convert to proper keywords array format
           console.log('[ROUTES] Converting text_query.query to keywords array');
           searchParams.query.text_query = {
-            keywords: [queryText.trim()]
+            keywords: [queryText.trim()],
           };
         } else {
           // Empty query text, use our reliable exact_query approach
           console.log('[ROUTES] Empty text_query.query detected, using exact_query instead');
           searchParams.query = {
             exact_query: {
-              attribute_name: "name",
-              attribute_value: "."
-            }
+              attribute_name: 'name',
+              attribute_value: '.',
+            },
           };
         }
-      } else if (!searchParams.query.text_query.keywords || 
-                !Array.isArray(searchParams.query.text_query.keywords) ||
-                searchParams.query.text_query.keywords.length === 0) {
+      } else if (
+        !searchParams.query.text_query.keywords ||
+        !Array.isArray(searchParams.query.text_query.keywords) ||
+        searchParams.query.text_query.keywords.length === 0
+      ) {
         // Malformed text_query without keywords array or with empty array
         console.log('[ROUTES] Malformed text_query detected, using exact_query instead');
         searchParams.query = {
           exact_query: {
-            attribute_name: "name",
-            attribute_value: "."
-          }
+            attribute_name: 'name',
+            attribute_value: '.',
+          },
         };
       }
     } else {
       // Not using text_query, check other query types for validity
       const validQueryTypes = [
-        'prefix_query', 'exact_query', 'sorted_attribute_query', 'text_query',
-        'item_query', 'item_variation_query', 'items_for_tax_query',
-        'items_for_modifier_list_query', 'items_for_item_options'
+        'prefix_query',
+        'exact_query',
+        'sorted_attribute_query',
+        'text_query',
+        'item_query',
+        'item_variation_query',
+        'items_for_tax_query',
+        'items_for_modifier_list_query',
+        'items_for_item_options',
       ];
-      
-      const queryKeys = Object.keys(searchParams.query).filter(key => validQueryTypes.includes(key));
-      
+
+      const queryKeys = Object.keys(searchParams.query).filter(key =>
+        validQueryTypes.includes(key)
+      );
+
       if (queryKeys.length === 0) {
         console.log('[ROUTES] No valid query types found in request, using default exact_query');
-        searchParams.query = { 
+        searchParams.query = {
           exact_query: {
-            attribute_name: "name",
-            attribute_value: "."  // Use a very common character to match almost everything
-          }
+            attribute_name: 'name',
+            attribute_value: '.', // Use a very common character to match almost everything
+          },
         };
       }
     }
-    
+
     console.log('[ROUTES] Modified search params:', JSON.stringify(searchParams, null, 2));
-    
+
     const result = await catalogService.searchCatalogItems(
       req.user.squareAccessToken,
       searchParams
     );
-    
+
     console.log('[REQUEST BOUNDARY: CATALOG SEARCH END] Success:', result.success);
     res.json(result);
   } catch (error) {
@@ -314,7 +318,7 @@ router.post('/search', protect, async (req, res) => {
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to search catalog objects',
-      error: error.details || error.toString()
+      error: error.details || error.toString(),
     });
   }
 });
@@ -324,164 +328,189 @@ router.post('/search', protect, async (req, res) => {
  * @desc Batch retrieve catalog objects
  * @access Private
  */
-router.post('/batch-retrieve', protect, validateRequest({
-  body: {
-    objectIds: { type: 'array', required: true },
-    includeRelatedObjects: { type: 'boolean' }
+router.post(
+  '/batch-retrieve',
+  protect,
+  validateRequest({
+    body: {
+      objectIds: { type: 'array', required: true },
+      includeRelatedObjects: { type: 'boolean' },
+    },
+  }),
+  async (req, res) => {
+    try {
+      const { objectIds, includeRelatedObjects = true } = req.body;
+
+      const result = await catalogService.batchRetrieveCatalogObjects(
+        req.user.squareAccessToken,
+        objectIds,
+        includeRelatedObjects
+      );
+
+      res.json(result);
+    } catch (error) {
+      console.error('Error batch retrieving catalog objects:', error);
+      res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || 'Failed to batch retrieve catalog objects',
+        error: error.details || error.toString(),
+      });
+    }
   }
-}), async (req, res) => {
-  try {
-    const { objectIds, includeRelatedObjects = true } = req.body;
-    
-    const result = await catalogService.batchRetrieveCatalogObjects(
-      req.user.squareAccessToken,
-      objectIds,
-      includeRelatedObjects
-    );
-    
-    res.json(result);
-  } catch (error) {
-    console.error('Error batch retrieving catalog objects:', error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || 'Failed to batch retrieve catalog objects',
-      error: error.details || error.toString()
-    });
-  }
-});
+);
 
 /**
  * @route POST /api/catalog/batch-upsert
  * @desc Batch upsert catalog objects
  * @access Private
  */
-router.post('/batch-upsert', protect, validateRequest({
-  body: {
-    batches: { 
-      type: 'array',
-      required: true,
-      items: {
-        type: 'object',
-        properties: {
-          objects: { type: 'array', required: true }
-        }
-      }
+router.post(
+  '/batch-upsert',
+  protect,
+  validateRequest({
+    body: {
+      batches: {
+        type: 'array',
+        required: true,
+        items: {
+          type: 'object',
+          properties: {
+            objects: { type: 'array', required: true },
+          },
+        },
+      },
+    },
+  }),
+  async (req, res) => {
+    try {
+      const { batches } = req.body;
+
+      const result = await catalogService.batchUpsertCatalogObjects(
+        req.user.squareAccessToken,
+        batches
+      );
+
+      res.json(result);
+    } catch (error) {
+      console.error('Error batch upserting catalog objects:', error);
+      res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || 'Failed to batch upsert catalog objects',
+        error: error.details || error.toString(),
+      });
     }
   }
-}), async (req, res) => {
-  try {
-    const { batches } = req.body;
-    
-    const result = await catalogService.batchUpsertCatalogObjects(
-      req.user.squareAccessToken,
-      batches
-    );
-    
-    res.json(result);
-  } catch (error) {
-    console.error('Error batch upserting catalog objects:', error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || 'Failed to batch upsert catalog objects',
-      error: error.details || error.toString()
-    });
-  }
-});
+);
 
 /**
  * @route POST /api/catalog/batch-delete
  * @desc Batch delete catalog objects
  * @access Private
  */
-router.post('/batch-delete', protect, validateRequest({
-  body: {
-    objectIds: { type: 'array', required: true }
+router.post(
+  '/batch-delete',
+  protect,
+  validateRequest({
+    body: {
+      objectIds: { type: 'array', required: true },
+    },
+  }),
+  async (req, res) => {
+    try {
+      const { objectIds } = req.body;
+
+      const result = await catalogService.batchDeleteCatalogObjects(
+        req.user.squareAccessToken,
+        objectIds
+      );
+
+      res.json(result);
+    } catch (error) {
+      console.error('Error batch deleting catalog objects:', error);
+      res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || 'Failed to batch delete catalog objects',
+        error: error.details || error.toString(),
+      });
+    }
   }
-}), async (req, res) => {
-  try {
-    const { objectIds } = req.body;
-    
-    const result = await catalogService.batchDeleteCatalogObjects(
-      req.user.squareAccessToken,
-      objectIds
-    );
-    
-    res.json(result);
-  } catch (error) {
-    console.error('Error batch deleting catalog objects:', error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || 'Failed to batch delete catalog objects',
-      error: error.details || error.toString()
-    });
-  }
-});
+);
 
 /**
  * @route POST /api/catalog/item/:id/modifier-lists
  * @desc Update item modifier lists
  * @access Private
  */
-router.post('/item/:id/modifier-lists', protect, validateRequest({
-  body: {
-    modifierListsToEnable: { type: 'array' },
-    modifierListsToDisable: { type: 'array' }
+router.post(
+  '/item/:id/modifier-lists',
+  protect,
+  validateRequest({
+    body: {
+      modifierListsToEnable: { type: 'array' },
+      modifierListsToDisable: { type: 'array' },
+    },
+  }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { modifierListsToEnable = [], modifierListsToDisable = [] } = req.body;
+
+      const result = await catalogService.updateItemModifierLists(
+        req.user.squareAccessToken,
+        id,
+        modifierListsToEnable,
+        modifierListsToDisable
+      );
+
+      res.json(result);
+    } catch (error) {
+      console.error(`Error updating modifier lists for item ${req.params.id}:`, error);
+      res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || 'Failed to update item modifier lists',
+        error: error.details || error.toString(),
+      });
+    }
   }
-}), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { modifierListsToEnable = [], modifierListsToDisable = [] } = req.body;
-    
-    const result = await catalogService.updateItemModifierLists(
-      req.user.squareAccessToken,
-      id,
-      modifierListsToEnable,
-      modifierListsToDisable
-    );
-    
-    res.json(result);
-  } catch (error) {
-    console.error(`Error updating modifier lists for item ${req.params.id}:`, error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || 'Failed to update item modifier lists',
-      error: error.details || error.toString()
-    });
-  }
-});
+);
 
 /**
  * @route POST /api/catalog/item/:id/taxes
  * @desc Update item taxes
  * @access Private
  */
-router.post('/item/:id/taxes', protect, validateRequest({
-  body: {
-    taxesToEnable: { type: 'array' },
-    taxesToDisable: { type: 'array' }
+router.post(
+  '/item/:id/taxes',
+  protect,
+  validateRequest({
+    body: {
+      taxesToEnable: { type: 'array' },
+      taxesToDisable: { type: 'array' },
+    },
+  }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { taxesToEnable = [], taxesToDisable = [] } = req.body;
+
+      const result = await catalogService.updateItemTaxes(
+        req.user.squareAccessToken,
+        id,
+        taxesToEnable,
+        taxesToDisable
+      );
+
+      res.json(result);
+    } catch (error) {
+      console.error(`Error updating taxes for item ${req.params.id}:`, error);
+      res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || 'Failed to update item taxes',
+        error: error.details || error.toString(),
+      });
+    }
   }
-}), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { taxesToEnable = [], taxesToDisable = [] } = req.body;
-    
-    const result = await catalogService.updateItemTaxes(
-      req.user.squareAccessToken,
-      id,
-      taxesToEnable,
-      taxesToDisable
-    );
-    
-    res.json(result);
-  } catch (error) {
-    console.error(`Error updating taxes for item ${req.params.id}:`, error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || 'Failed to update item taxes',
-      error: error.details || error.toString()
-    });
-  }
-});
+);
 
 /**
  * @route GET /categories
@@ -491,25 +520,22 @@ router.post('/item/:id/taxes', protect, validateRequest({
 router.get('/categories', protect, async (req, res) => {
   try {
     // Use the search endpoint with object_types set to CATEGORY
-    const result = await catalogService.searchCatalogItems(
-      req.user.squareAccessToken,
-      {
-        object_types: ['CATEGORY'],
-        limit: req.query.limit ? parseInt(req.query.limit) : 100,
-        cursor: req.query.cursor,
-        include_related_objects: req.query.include_related_objects === 'true'
-      }
-    );
-    
+    const result = await catalogService.searchCatalogItems(req.user.squareAccessToken, {
+      object_types: ['CATEGORY'],
+      limit: req.query.limit ? parseInt(req.query.limit) : 100,
+      cursor: req.query.cursor,
+      include_related_objects: req.query.include_related_objects === 'true',
+    });
+
     res.json(result);
   } catch (error) {
     console.error('Error getting categories:', error);
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to get categories',
-      error: error.details || error.toString()
+      error: error.details || error.toString(),
     });
   }
 });
 
-module.exports = router; 
+module.exports = router;

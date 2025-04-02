@@ -11,22 +11,22 @@ const baseSchema = {
   stockQuantity: Joi.number().min(0).default(0),
   isActive: Joi.boolean().default(true),
   images: Joi.array().items(Joi.string()).default([]),
-  lastScanned: Joi.date().allow(null).default(null)
+  lastScanned: Joi.date().allow(null).default(null),
 };
 
 // Schema for creating a new product
 const createSchema = Joi.object({
   ...baseSchema,
   name: baseSchema.name.required(),
-  price: baseSchema.price.required()
+  price: baseSchema.price.required(),
 });
 
 // Schema for updating a product
 const updateSchema = Joi.object({
-  ...baseSchema
+  ...baseSchema,
 });
 
 module.exports = {
   create: createSchema,
-  update: updateSchema
-}; 
+  update: updateSchema,
+};

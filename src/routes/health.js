@@ -15,4 +15,4 @@ router.get('/oauth-debug', healthController.oauthDebugTool);
 // AWS diagnostic route
 router.get('/aws-diagnostic', awsDiagnosticController.runAwsDiagnostic);
 
-module.exports = router; 
+module.exports = router;

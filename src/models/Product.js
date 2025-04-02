@@ -1,12 +1,20 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, ScanCommand, GetCommand, QueryCommand, PutCommand, UpdateCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  ScanCommand,
+  GetCommand,
+  QueryCommand,
+  PutCommand,
+  UpdateCommand,
+  DeleteCommand,
+} = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 // Configure AWS
 const client = new DynamoDBClient({
   maxAttempts: 3,
   requestTimeout: 3000,
-  region: process.env.AWS_REGION
+  region: process.env.AWS_REGION,
 });
 
 const dynamoDb = DynamoDBDocumentClient.from(client);
@@ -21,7 +29,7 @@ const ProductService = {
    */
   async getAll() {
     const params = {
-      TableName: productsTable
+      TableName: productsTable,
     };
 
     const result = await dynamoDb.send(new ScanCommand(params));
@@ -35,7 +43,7 @@ const ProductService = {
   async getById(id) {
     const params = {
       TableName: productsTable,
-      Key: { id }
+      Key: { id },
     };
 
     const result = await dynamoDb.send(new GetCommand(params));
@@ -51,7 +59,7 @@ const ProductService = {
       TableName: productsTable,
       IndexName: 'SkuIndex',
       KeyConditionExpression: 'sku = :sku',
-      ExpressionAttributeValues: { ':sku': sku }
+      ExpressionAttributeValues: { ':sku': sku },
     };
 
     const result = await dynamoDb.send(new QueryCommand(params));
@@ -67,7 +75,7 @@ const ProductService = {
       TableName: productsTable,
       IndexName: 'BarcodeIndex',
       KeyConditionExpression: 'barcode = :barcode',
-      ExpressionAttributeValues: { ':barcode': barcode }
+      ExpressionAttributeValues: { ':barcode': barcode },
     };
 
     const result = await dynamoDb.send(new QueryCommand(params));
@@ -85,12 +93,12 @@ const ProductService = {
       ...product,
       isActive: true,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
     };
 
     const params = {
       TableName: productsTable,
-      Item: newProduct
+      Item: newProduct,
     };
 
     await dynamoDb.send(new PutCommand(params));
@@ -104,16 +112,17 @@ const ProductService = {
    */
   async update(id, updates) {
     const timestamp = new Date().toISOString();
-    
+
     // Build update expression and attribute values
     let updateExpression = 'SET updatedAt = :updatedAt';
     const expressionAttributeValues = {
-      ':updatedAt': timestamp
+      ':updatedAt': timestamp,
     };
 
     // Add each update field to the expression
     Object.keys(updates).forEach((key, index) => {
-      if (key !== 'id') { // Don't update the primary key
+      if (key !== 'id') {
+        // Don't update the primary key
         const attributeName = `:attr${index}`;
         updateExpression += `, ${key} = ${attributeName}`;
         expressionAttributeValues[attributeName] = updates[key];
@@ -125,7 +134,7 @@ const ProductService = {
       Key: { id },
       UpdateExpression: updateExpression,
       ExpressionAttributeValues: expressionAttributeValues,
-      ReturnValues: 'ALL_NEW'
+      ReturnValues: 'ALL_NEW',
     };
 
     const result = await dynamoDb.send(new UpdateCommand(params));
@@ -139,7 +148,7 @@ const ProductService = {
   async delete(id) {
     const params = {
       TableName: productsTable,
-      Key: { id }
+      Key: { id },
     };
 
     return dynamoDb.send(new DeleteCommand(params));
@@ -154,16 +163,16 @@ const ProductService = {
       TableName: productsTable,
       FilterExpression: 'contains(#name, :searchTerm) OR contains(description, :searchTerm)',
       ExpressionAttributeNames: {
-        '#name': 'name' // 'name' is a reserved word in DynamoDB
+        '#name': 'name', // 'name' is a reserved word in DynamoDB
       },
       ExpressionAttributeValues: {
-        ':searchTerm': searchTerm
-      }
+        ':searchTerm': searchTerm,
+      },
     };
 
     const result = await dynamoDb.send(new ScanCommand(params));
     return result.Items;
-  }
+  },
 };
 
-module.exports = ProductService; 
+module.exports = ProductService;

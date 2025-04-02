@@ -9,7 +9,7 @@ function checkHealth(req, res) {
     status: 'ok',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
-    message: 'API is up and running'
+    message: 'API is up and running',
   });
 }
 
@@ -22,28 +22,29 @@ async function checkDetailedHealth(req, res) {
       api: {
         status: 'ok',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV
+        environment: process.env.NODE_ENV,
       },
       dynamoDB: { status: 'checking' },
       square: {
         config: {
           applicationId: process.env.SQUARE_APPLICATION_ID ? 'configured' : 'missing',
-          environment: process.env.SQUARE_ENVIRONMENT || 'not set'
-        }
+          environment: process.env.SQUARE_ENVIRONMENT || 'not set',
+        },
       },
       env: {
         region: process.env.AWS_REGION || 'not set',
-        apiBaseUrl: process.env.API_BASE_URL || 'not set'
-      }
+        apiBaseUrl: process.env.API_BASE_URL || 'not set',
+      },
     };
 
     // Check DynamoDB connection
-    const client = process.env.IS_OFFLINE === 'true'
-      ? new DynamoDBClient({
-          region: 'localhost',
-          endpoint: 'http://localhost:8000'
-        })
-      : new DynamoDBClient({ region: process.env.AWS_REGION });
+    const client =
+      process.env.IS_OFFLINE === 'true'
+        ? new DynamoDBClient({
+            region: 'localhost',
+            endpoint: 'http://localhost:8000',
+          })
+        : new DynamoDBClient({ region: process.env.AWS_REGION });
 
     const dynamoDb = DynamoDBDocumentClient.from(client);
 
@@ -54,30 +55,30 @@ async function checkDetailedHealth(req, res) {
         const USERS_TABLE = process.env.USERS_TABLE;
         const params = {
           TableName: USERS_TABLE,
-          Limit: 1
+          Limit: 1,
         };
         await dynamoDb.send(new ScanCommand(params));
         results.dynamoDB = { status: 'ok', message: 'Connected to local DynamoDB' };
       } else {
         // For AWS DynamoDB, check the service
         const tables = await dynamoDb.send(new ListTablesCommand({}));
-        results.dynamoDB = { 
-          status: 'ok', 
+        results.dynamoDB = {
+          status: 'ok',
           message: 'Connected to AWS DynamoDB',
-          tables: tables.TableNames.filter(table => table.includes('joylabs'))
+          tables: tables.TableNames.filter(table => table.includes('joylabs')),
         };
       }
     } catch (error) {
-      results.dynamoDB = { 
-        status: 'error', 
-        message: `Failed to connect to DynamoDB: ${error.message}` 
+      results.dynamoDB = {
+        status: 'error',
+        message: `Failed to connect to DynamoDB: ${error.message}`,
       };
     }
 
     // Check Square API configuration
     if (process.env.SQUARE_APPLICATION_ID && process.env.SQUARE_APPLICATION_SECRET) {
       results.square.status = 'configured';
-      
+
       // Add OAuth URL for testing
       const squareService = require('../services/square');
       const testState = 'test-state-parameter';
@@ -89,9 +90,9 @@ async function checkDetailedHealth(req, res) {
     res.json(results);
   } catch (error) {
     console.error('Health check error:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: error.message 
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
     });
   }
 }
@@ -103,15 +104,17 @@ function renderTestPage(req, res) {
   const squareService = require('../services/square');
   const testState = 'test-state-parameter';
   const squareOAuthUrl = squareService.getAuthorizationUrl(testState);
-  
+
   // Get the base URL for links
   const isLocalhost = req.get('host').includes('localhost');
-  const baseUrl = isLocalhost ? process.env.API_BASE_URL : process.env.API_PROD_URL || req.protocol + '://' + req.get('host');
-  
+  const baseUrl = isLocalhost
+    ? process.env.API_BASE_URL
+    : process.env.API_PROD_URL || req.protocol + '://' + req.get('host');
+
   // Ensure we show the correct environment
   const squareEnv = process.env.SQUARE_ENVIRONMENT || 'sandbox';
   const squareEnvDisplay = squareEnv === 'production' ? 'Production' : 'Sandbox';
-  
+
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -594,5 +597,5 @@ module.exports = {
   checkDetailedHealth,
   renderTestPage,
   oauthTestPage,
-  oauthDebugTool
-}; 
+  oauthDebugTool,
+};

@@ -11,31 +11,31 @@
 function validateRequest(schema) {
   return (req, res, next) => {
     const errors = {};
-    
+
     // Function to validate a section of the request
     const validateSection = (section, data) => {
       const sectionErrors = {};
-      
+
       if (!schema[section]) {
         return null; // No schema for this section
       }
-      
+
       // Check each field in the schema
       Object.keys(schema[section]).forEach(field => {
         const fieldSchema = schema[section][field];
         const value = data[field];
-        
+
         // Check if required field is missing
         if (fieldSchema.required && (value === undefined || value === null || value === '')) {
           sectionErrors[field] = `${field} is required`;
           return;
         }
-        
+
         // Skip validation if field is not provided and not required
         if (value === undefined || value === null) {
           return;
         }
-        
+
         // Validate field type
         if (fieldSchema.type) {
           const typeErrors = validateType(value, fieldSchema.type, field);
@@ -44,13 +44,13 @@ function validateRequest(schema) {
             return;
           }
         }
-        
+
         // Validate enum values
         if (fieldSchema.enum && !fieldSchema.enum.includes(value)) {
           sectionErrors[field] = `${field} must be one of: ${fieldSchema.enum.join(', ')}`;
           return;
         }
-        
+
         // Validate min/max for numbers
         if (fieldSchema.type === 'number' || fieldSchema.type === 'integer') {
           if (fieldSchema.min !== undefined && value < fieldSchema.min) {
@@ -60,7 +60,7 @@ function validateRequest(schema) {
             sectionErrors[field] = `${field} must be at most ${fieldSchema.max}`;
           }
         }
-        
+
         // Validate string length
         if (fieldSchema.type === 'string') {
           if (fieldSchema.minLength !== undefined && value.length < fieldSchema.minLength) {
@@ -70,7 +70,7 @@ function validateRequest(schema) {
             sectionErrors[field] = `${field} must be at most ${fieldSchema.maxLength} characters`;
           }
         }
-        
+
         // Validate array length
         if (fieldSchema.type === 'array') {
           if (fieldSchema.minItems !== undefined && value.length < fieldSchema.minItems) {
@@ -80,12 +80,12 @@ function validateRequest(schema) {
             sectionErrors[field] = `${field} must have at most ${fieldSchema.maxItems} items`;
           }
         }
-        
+
         // Validate regex pattern
         if (fieldSchema.pattern && !new RegExp(fieldSchema.pattern).test(value)) {
           sectionErrors[field] = `${field} does not match required pattern`;
         }
-        
+
         // Custom validation function
         if (fieldSchema.validate && typeof fieldSchema.validate === 'function') {
           const customError = fieldSchema.validate(value);
@@ -94,37 +94,37 @@ function validateRequest(schema) {
           }
         }
       });
-      
+
       return Object.keys(sectionErrors).length > 0 ? sectionErrors : null;
     };
-    
+
     // Validate body if schema has body definition
     const bodyErrors = validateSection('body', req.body);
     if (bodyErrors) {
       errors.body = bodyErrors;
     }
-    
+
     // Validate query parameters if schema has query definition
     const queryErrors = validateSection('query', req.query);
     if (queryErrors) {
       errors.query = queryErrors;
     }
-    
+
     // Validate URL parameters if schema has params definition
     const paramsErrors = validateSection('params', req.params);
     if (paramsErrors) {
       errors.params = paramsErrors;
     }
-    
+
     // If any errors, return 400 with error details
     if (Object.keys(errors).length > 0) {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
-        errors
+        errors,
       });
     }
-    
+
     // All validations passed
     next();
   };
@@ -198,10 +198,10 @@ function validateType(value, type, field) {
     default:
       return `Unknown type: ${type}`;
   }
-  
+
   return null; // No error
 }
 
 module.exports = {
-  validateRequest
-}; 
+  validateRequest,
+};

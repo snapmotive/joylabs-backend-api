@@ -26,11 +26,11 @@ const productsController = {
   async getProductById(req, res, next) {
     try {
       const product = await ProductService.getById(req.params.id);
-      
+
       if (!product) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Product not found' 
+        return res.status(404).json({
+          success: false,
+          error: 'Product not found',
         });
       }
 
@@ -48,11 +48,11 @@ const productsController = {
     try {
       // Validate request body
       const { error, value } = validate(req.body, productSchema.create);
-      
+
       if (error) {
-        return res.status(400).json({ 
-          success: false, 
-          error: error.details[0].message 
+        return res.status(400).json({
+          success: false,
+          error: error.details[0].message,
         });
       }
 
@@ -62,7 +62,7 @@ const productsController = {
         if (existingProduct) {
           return res.status(400).json({
             success: false,
-            error: 'Product with this SKU already exists'
+            error: 'Product with this SKU already exists',
           });
         }
       }
@@ -73,7 +73,7 @@ const productsController = {
         if (existingProduct) {
           return res.status(400).json({
             success: false,
-            error: 'Product with this barcode already exists'
+            error: 'Product with this barcode already exists',
           });
         }
       }
@@ -93,21 +93,21 @@ const productsController = {
     try {
       // Validate request body
       const { error, value } = validate(req.body, productSchema.update);
-      
+
       if (error) {
-        return res.status(400).json({ 
-          success: false, 
-          error: error.details[0].message 
+        return res.status(400).json({
+          success: false,
+          error: error.details[0].message,
         });
       }
 
       // Check if product exists
       const product = await ProductService.getById(req.params.id);
-      
+
       if (!product) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Product not found' 
+        return res.status(404).json({
+          success: false,
+          error: 'Product not found',
         });
       }
 
@@ -117,7 +117,7 @@ const productsController = {
         if (existingProduct && existingProduct.id !== req.params.id) {
           return res.status(400).json({
             success: false,
-            error: 'Product with this SKU already exists'
+            error: 'Product with this SKU already exists',
           });
         }
       }
@@ -128,7 +128,7 @@ const productsController = {
         if (existingProduct && existingProduct.id !== req.params.id) {
           return res.status(400).json({
             success: false,
-            error: 'Product with this barcode already exists'
+            error: 'Product with this barcode already exists',
           });
         }
       }
@@ -148,11 +148,11 @@ const productsController = {
     try {
       // Check if product exists
       const product = await ProductService.getById(req.params.id);
-      
+
       if (!product) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Product not found' 
+        return res.status(404).json({
+          success: false,
+          error: 'Product not found',
         });
       }
 
@@ -161,7 +161,7 @@ const productsController = {
     } catch (error) {
       next(error);
     }
-  }
+  },
 };
 
-module.exports = productsController; 
+module.exports = productsController;

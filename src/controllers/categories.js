@@ -38,5 +38,5 @@ module.exports = {
   getCategoryById,
   createCategory,
   updateCategory,
-  deleteCategory
-}; 
+  deleteCategory,
+};
