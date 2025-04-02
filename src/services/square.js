@@ -516,12 +516,17 @@ function timingSafeEqual(a, b) {
     return false;
   }
   
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
+  // Convert strings to Buffer objects for use with crypto.timingSafeEqual
+  const bufferA = Buffer.from(a, 'utf8');
+  const bufferB = Buffer.from(b, 'utf8');
   
-  return result === 0;
+  try {
+    // Use the native Node.js crypto.timingSafeEqual for constant-time comparison
+    return crypto.timingSafeEqual(bufferA, bufferB);
+  } catch (error) {
+    console.error('Error in timingSafeEqual:', error);
+    return false;
+  }
 }
 
 /**
@@ -552,8 +557,16 @@ async function executeSquareRequest(requestFn, accessToken, endpoint = 'square-a
 
 /**
  * Refresh an expired access token using a refresh token
+ * This function implements token refresh for Square OAuth with comprehensive error handling.
+ * It includes retry logic, rate limiting and differentiated error responses to help client applications.
+ * 
  * @param {string} refreshToken - The refresh token from a previous token exchange
- * @returns {Promise<Object>} The refreshed token response
+ * @returns {Promise<Object>} The refreshed token response with access_token, refresh_token, expires_at and merchant_id
+ * 
+ * Error handling:
+ * - INVALID_REFRESH_TOKEN: When refresh token has expired or is invalid, client must re-authenticate
+ * - TOKEN_REFRESH_ERROR: General token refresh failures
+ * - Network errors: Automatically retried up to 4 times with exponential backoff
  */
 async function refreshAccessToken(refreshToken) {
   try {

@@ -14,7 +14,12 @@ This document outlines the changes made to upgrade the JoyLabs Backend API to No
    - Added deprecation notice to `src/oauthHandlers.js` 
    - Enhanced JSDoc comments for the `refreshAccessToken` function
 
-3. **Removed Firebase References**:
+3. **Crypto Module Improvements**:
+   - Replaced custom `timingSafeEqual` implementation with the native `crypto.timingSafeEqual` function
+   - Updated Buffer handling to use proper error handling with the native crypto functions
+   - Retained the use of `crypto.randomBytes()` which is still fully supported in Node.js 22
+
+4. **Removed Firebase References**:
    - Confirmed no Firebase dependencies in main codebase
    - Firebase files are already isolated in the `unused-firebase-files` directory
 
