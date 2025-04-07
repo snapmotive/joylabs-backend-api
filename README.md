@@ -521,11 +521,70 @@ _This documentation is maintained by the JoyLabs Backend Team_
 - **Node.js 22 Migration**: The codebase has been updated to run on Node.js 22. See [Node.js 22 Migration Guide](docs/nodejs22-migration.md) for details.
 - **Square SDK v42**: Updated from v35.1.0 to v42.0.0. API property access patterns have been updated across the codebase.
 
+##GOALS FO ROUR FRONTEND:
+Square Catalog Management Flow for My App
+I'll explain how My App should handle the catalog when downloading, updating, and modifying items. This flow is essential for understanding how product information moves between Square's servers and your custom catalog management application.
+Initial Catalog Download
+When My App first connects to a Square account:
+
+My App authenticates with Square's servers using account credentials
+My App requests the catalog data via Square's Catalog API
+The server returns a complete snapshot of the catalog including:
+
+Items and item variations
+Categories
+Modifiers and modifier lists
+Taxes
+Discounts
+
+This data is stored locally in My App's database
+My App establishes a version reference point (catalog version)
+
+Updating the Catalog
+When changes are made to the catalog (either through Dashboard or other means):
+
+Square's server assigns a new version ID to the updated catalog
+My App periodically polls the server to check if its local version is current
+If a new version is available, My App requests only the delta (changes) since its current version
+The server sends only modified records rather than the entire catalog
+My App applies these changes to its local database
+The local version reference is updated to match the server
+
+Making Modifications from My App
+When you modify the catalog directly from My App:
+
+My App captures the changes in a local transaction
+The changes are immediately applied to the local database for instant visibility
+The changes are queued for synchronization with the server
+My App sends the changes to the server when connectivity is available
+The server processes the changes and assigns a new catalog version
+My App updates its version reference when confirmation is received
+
+Conflict Resolution
+If simultaneous changes occur from multiple sources:
+
+The server applies a "last write wins" policy for most conflicts
+If My App made changes while offline, they're synchronized when connectivity returns
+If server changes occurred while My App was offline, My App downloads them during reconnection
+My App prioritizes server changes in conflict situations
+Some critical fields may have special conflict resolution rules to prevent data loss
+
+Offline Functionality
+When My App operates offline:
+
+The app continues using its locally stored catalog
+Modifications are stored locally and queued for synchronization
+Upon reconnection, My App first sends pending changes to the server
+Then My App downloads any server-side changes that occurred while offline
+The local database is reconciled with the server version
+
+This flow ensures that your catalog stays consistent across all devices while allowing for flexible operations even when connectivity is limited.
+
 ## Frontend Catalog Synchronization Guide
 
 ### Introduction
 
-This guide outlines the process for a React Native frontend application to download the entire merchant catalog from the JoyLabs backend API and store it locally in an SQLite database. The backend acts as a proxy to the Square Catalog API, providing a consistent interface (`/api/*`) regardless of Square's underlying API version.
+This guide outlines the process for a React Native frontend application to download the entire merchant catalog from the JoyLabs backend API and store it locally in an EXPO SQLite database. The backend acts as a proxy to the Square Catalog API, providing a consistent interface (`/api/*`) regardless of Square's underlying API version.
 
 ### Backend API Overview
 
@@ -545,22 +604,22 @@ To download the entire catalog, which can be large (18,000+ items), you must use
 
 #### Request Parameters
 
-- `limit` (optional, integer): The maximum number of objects to return per page. The backend defaults to `100` if not specified. While Square's underlying API might support higher limits (potentially up to 1000 for some endpoints), requesting **200-500** per page is a reasonable starting point for performance and stability. Adjust based on testing.
+- `limit` (optional, integer): The maximum number of objects to return per page. The backend now defaults to **1000** and caps the requested value at 1000. Requesting up to 1000 per page is recommended for faster initial sync, but monitor performance.
 - `cursor` (optional, string): The pagination cursor returned from the previous request. Omit this for the _first_ request.
 - `types` (optional, string): Comma-separated list of `CatalogObject` types to retrieve (e.g., `ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE`). If omitted, the backend defaults to `ITEM,CATEGORY`. For a full sync, you likely want most, if not all, available types.
 
-**Example Initial Request:**
+**Example Initial Request (Requesting max limit):**
 
 ```http
-GET /api/catalog/list?limit=500&types=ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE HTTP/1.1
+GET /api/catalog/list?limit=1000&types=ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE HTTP/1.1
 Host: gki8kva7e3.execute-api.us-west-1.amazonaws.com
 Authorization: Bearer <YOUR_JWT_TOKEN>
 ```
 
-**Example Subsequent Request (with cursor):**
+**Example Subsequent Request (Requesting max limit):**
 
 ```http
-GET /api/catalog/list?limit=500&types=ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE&cursor=CURSOR_VALUE_FROM_PREVIOUS_RESPONSE HTTP/1.1
+GET /api/catalog/list?limit=1000&types=ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE&cursor=CURSOR_VALUE_FROM_PREVIOUS_RESPONSE HTTP/1.1
 Host: gki8kva7e3.execute-api.us-west-1.amazonaws.com
 Authorization: Bearer <YOUR_JWT_TOKEN>
 ```
@@ -846,3 +905,78 @@ async function syncFullCatalog(authToken) {
 - **Error Robustness**: Build robust error handling and retry mechanisms, especially for network issues and rate limiting (429).
 - **Data Consistency**: Ensure your database schema and upsert logic correctly handle relationships between different catalog object types (e.g., items linking to categories, variations linking to items, modifiers linking to modifier lists).
 - **Testing**: Test thoroughly with a smaller dataset first, then scale up. Monitor memory usage and performance during the sync process.
+
+## Backend Endpoints for Frontend Sync
+
+Here are the primary backend API endpoints the frontend will use for catalog synchronization:
+
+1.  **Get Authenticated Merchant Info**: `GET /api/merchant/me`
+
+    - **Purpose**: Retrieve details about the currently authenticated merchant (business name, ID, country, etc.). Useful for initializing user context.
+    - **Authentication**: Required (Bearer Token).
+    - **Response**: `{ success: true, merchant: { merchantId: '...', businessName: '...', ... } }`
+
+2.  **List Catalog Objects (Full Sync)**: `GET /api/catalog/list`
+
+    - **Purpose**: Download the entire catalog initially or perform a full refresh.
+    - **Authentication**: Required (Bearer Token).
+    - **Query Parameters**: `limit` (up to 1000), `cursor` (for pagination), `types` (comma-separated list, e.g., `ITEM,CATEGORY,IMAGE`).
+    - **Response**: `{ success: true, objects: [...], cursor: '...' }` (See previous detailed example).
+
+3.  **Search Catalog Objects (Delta Sync)**: `POST /api/catalog/search`
+
+    - **Purpose**: Fetch only catalog objects updated since the last sync time.
+    - **Authentication**: Required (Bearer Token).
+    - **Request Body**: Square `SearchCatalogObjects` request body. Crucially, include the `begin_time` field set to the timestamp (ISO 8601 format) of the last successful sync.
+
+    ```json
+    {
+      "object_types": ["ITEM", "CATEGORY", "MODIFIER_LIST", "MODIFIER", "TAX", "DISCOUNT", "IMAGE"],
+      "include_deleted_objects": true, // Important to capture deletions
+      "include_related_objects": true,
+      "begin_time": "2024-04-07T22:00:00Z", // Timestamp of last sync
+      "limit": 1000 // Can also paginate search results if needed
+    }
+    ```
+
+    - **Response**: `{ success: true, objects: [...], cursor: '...', related_objects: [...] }` (Mirrors Square's `SearchCatalogObjects` response). Also includes `deleted_object_ids` if `include_deleted_objects` was true.
+
+4.  **Upsert (Create/Update) Catalog Object**: `POST /api/catalog/item`
+
+    - **Purpose**: Push local creations or modifications to Square.
+    - **Authentication**: Required (Bearer Token).
+    - **Request Body**: A single `CatalogObject` structure representing the item/category/etc. to create or update. For updates, include the correct `version` obtained from a previous fetch.
+
+    ```json
+    {
+      "idempotency_key": "unique-frontend-generated-key",
+      "object": {
+        "type": "ITEM",
+        "id": "#new-item-id" // Use # prefix for creation
+        // OR "id": "EXISTING_SQUARE_ID" for update
+        // "version": 1617444000000, // REQUIRED for updates
+        "item_data": { ... }
+      }
+    }
+    ```
+
+    - **Response**: `{ success: true, catalog_object: { ... }, id_mappings: [...] }` (Mirrors Square's `UpsertCatalogObject` response).
+
+5.  **Delete Catalog Object**: `DELETE /api/catalog/item/:id`
+
+    - **Purpose**: Delete an object from Square based on local actions.
+    - **Authentication**: Required (Bearer Token).
+    - **URL Parameter**: `:id` is the Square `CatalogObject` ID to delete.
+    - **Response**: `{ success: true, deleted_object_ids: ['...'], deleted_at: '...' }` (Mirrors Square's `DeleteCatalogObject` response).
+
+6.  **Retrieve Single Catalog Object**: `GET /api/catalog/item/:id`
+
+    - **Purpose**: Fetch the latest version of a specific item, often needed after a `VERSION_MISMATCH` error during an update attempt.
+    - **Authentication**: Required (Bearer Token).
+    - **URL Parameter**: `:id` is the Square `CatalogObject` ID to retrieve.
+    - **Response**: `{ success: true, catalogObject: { ... }, relatedObjects: [...] }`
+
+7.  **List Locations**: `GET /api/locations`
+    - **Purpose**: Get a list of the merchant's configured business locations.
+    - **Authentication**: Required (Bearer Token).
+    - **Response**: `{ success: true, locations: [{ id: '...', name: '...', ... }] }`

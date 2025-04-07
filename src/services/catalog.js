@@ -59,7 +59,11 @@ async function listCatalogItems(accessToken, options = {}) {
         // Parse options
         const types = options.types || ['ITEM', 'CATEGORY'];
         const typesArray = Array.isArray(types) ? types : types.split(',');
-        const limit = options.limit ? parseInt(options.limit) : 100;
+
+        // Default to 1000 if not provided, and cap at 1000
+        const requestedLimit = options.limit ? parseInt(options.limit) : 1000;
+        const limit = Math.min(Math.max(1, requestedLimit), 1000); // Ensure limit is between 1 and 1000
+
         const cursor = options.cursor || null;
         const includeRelatedObjects =
           options.includeRelatedObjects === true || options.includeRelatedObjects === 'true';
@@ -74,11 +78,14 @@ async function listCatalogItems(accessToken, options = {}) {
           includeDeletedObjects,
         });
 
+        // Ensure Square-Version header is set
+        client.agent.defaultHeaders['Square-Version'] = SQUARE_API_HEADER_VERSION;
+
         // Call Square SDK method with appropriate parameters
         return client.catalog.listCatalog(
           typesArray,
-          cursor,
-          limit,
+          cursor, // Pass the validated cursor
+          limit, // Pass the validated limit
           includeDeletedObjects,
           includeRelatedObjects
         );

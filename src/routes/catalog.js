@@ -16,49 +16,33 @@ const CatalogItem = require('../models/CatalogItem');
  */
 router.get('/list', protect, async (req, res) => {
   try {
-    const { page = 1, limit = 20, types = 'ITEM,CATEGORY' } = req.query;
+    // Default limit increased to 1000, aligned with service layer cap.
+    // Types default remains ITEM,CATEGORY unless specified.
+    const { limit = 1000, types = 'ITEM,CATEGORY', cursor } = req.query;
 
-    // First, check our database for stored items for this merchant
-    const storedItems = await CatalogItem.list({
-      merchant_id: req.user.merchantId,
-      page: parseInt(page),
-      limit: parseInt(limit),
-    });
+    // Remove the local DB lookup for full catalog sync via /list
+    // // First, check our database for stored items for this merchant
+    // const storedItems = await CatalogItem.list({
+    //   merchant_id: req.user.merchantId,
+    //   page: parseInt(page), // page is no longer used
+    //   limit: parseInt(limit),
+    // });
 
-    // Then get the items from Square (this will be more comprehensive)
+    // Get items directly from Square using the service
     const result = await catalogService.listCatalogItems(req.user.squareAccessToken, {
       types: types.split(','),
-      page: parseInt(page),
       limit: parseInt(limit),
+      cursor: cursor, // Pass cursor directly
+      // We can infer includeRelatedObjects/includeDeletedObjects if needed from query params too
+      // includeRelatedObjects: req.query.includeRelatedObjects === 'true',
+      // includeDeletedObjects: req.query.includeDeletedObjects === 'true',
     });
 
-    // If we have local data, enrich the Square results
-    if (storedItems.items.length > 0) {
-      // Create a map of Square catalog IDs to local data
-      const localDataMap = storedItems.items.reduce((map, item) => {
-        map[item.square_catalog_id] = item;
-        return map;
-      }, {});
-
-      // Enrich the Square results with local data
-      if (result.objects) {
-        result.objects = result.objects.map(obj => {
-          const localData = localDataMap[obj.id];
-          if (localData) {
-            return {
-              ...obj,
-              local_data: {
-                id: localData.id,
-                created_at: localData.created_at,
-                updated_at: localData.updated_at,
-                metadata: localData.metadata,
-              },
-            };
-          }
-          return obj;
-        });
-      }
-    }
+    // Remove local data enrichment for this route - focus on raw Square data for sync
+    // // If we have local data, enrich the Square results
+    // if (storedItems.items.length > 0) {
+    //   // ... enrichment logic removed ...
+    // }
 
     res.json(result);
   } catch (error) {

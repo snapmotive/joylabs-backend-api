@@ -90,6 +90,7 @@ const authRoutes = require('./routes/auth');
 const healthRoutes = require('./routes/health');
 const catalogRoutes = require('./routes/catalog');
 const locationRoutes = require('./routes/locations');
+const merchantRoutes = require('./routes/merchant'); // Correct import
 
 // Performance monitoring middleware
 app.use((req, res, next) => {
@@ -111,10 +112,11 @@ app.use((req, res, next) => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/catalog', catalogRoutes);
-app.use('/api/health', healthRoutes);
+app.use('/api/health', healthRoutes); // This now includes /api/health/merchant/me temporarily
 app.use('/api/categories', categoriesRoutes);
 app.use('/api/products', productsRoutes);
 app.use('/api/locations', locationRoutes);
+app.use('/api/merchant', merchantRoutes); // Use correct path
 
 // Add request logging middleware
 app.use((req, res, next) => {
@@ -221,12 +223,13 @@ app.get('/', (req, res) => {
     message: 'Welcome to the JoyLabs API',
     links: {
       health: '/api/health',
-      test: '/api/test',
+      // test: '/api/test',
       products: '/api/products',
       categories: '/api/categories',
       auth: '/api/auth',
       catalog: '/api/catalog',
       locations: '/api/locations',
+      merchant: '/api/merchant/me', // Correct path now
     },
   });
 });
