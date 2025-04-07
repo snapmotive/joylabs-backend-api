@@ -85,7 +85,54 @@
 5. Verify AWS Lambda console for successful deployment
 6. Check CloudWatch logs for any runtime errors
 
+## Square's usage of camelCase vs snake_case
 
+The Square API uses camelCase for its SDKs and Node.js API, while the API reference documentation and webhooks use snake_case. 
+
+Here's a breakdown: 
+API Reference/Webhooks: Use snake\_case (e.g., payment_status).
+SDKs (including Node.js): Use camelCase (e.g., paymentStatus).
+Confusion: The discrepancy between the API reference and the actual API can be confusing, as the reference uses snake\_case while the SDKs expect camelCase.
+
+Example:
+API Reference/Webhooks/JSON response: payment_status
+SDK/Node.js: paymentStatus
+
+## Square endpoints caveats:
+Square's endpoints are prefixed with /v2/ and our frontend uses a url like this: https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/v2/locations or https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/v2/merchants/list 
+
+## API Endpoint Strategy
+
+Despite Square using `/v2/` prefixes, we maintain a consistent approach:
+
+1. **All JoyLabs endpoints use `/api/*` prefix**:
+   - `/api/locations` - NOT `/v2/locations`
+   - `/api/catalog` - NOT `/v2/catalog`
+   - `/api/products` - NOT `/v2/products`
+
+2. **Square API version handling**:
+   - URL path version is managed internally with `const SQUARE_API_VERSION = 'v2'`
+   - API header version is managed with `const SQUARE_API_HEADER_VERSION = '2025-03-19'`
+   - This dual versioning approach separates URL structure from API behaviors
+
+3. **Benefits**:
+   - Frontend code doesn't need to change when Square updates API versions
+   - Consistent API structure across our entire backend
+   - Clean separation between our API and Square's version changes
+   - Easier versioning control for our own API
+
+4. **Implementation**:
+   - All direct Square API calls use the version constants:
+     ```javascript
+     url: `https://connect.squareup.com/${SQUARE_API_VERSION}/locations`,
+     headers: {
+       'Square-Version': SQUARE_API_HEADER_VERSION
+     }
+     ```
+   - SDK calls set the version via client configuration:
+     ```javascript
+     client.agent.defaultHeaders['Square-Version'] = SQUARE_API_HEADER_VERSION;
+     ```
 
 
 

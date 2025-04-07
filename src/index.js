@@ -89,6 +89,7 @@ const categoriesRoutes = require('./routes/categories');
 const authRoutes = require('./routes/auth');
 const healthRoutes = require('./routes/health');
 const catalogRoutes = require('./routes/catalog');
+const locationRoutes = require('./routes/locations');
 
 // Performance monitoring middleware
 app.use((req, res, next) => {
@@ -108,11 +109,12 @@ app.use((req, res, next) => {
 });
 
 // Routes
-app.use('/api/products', productsRoutes);
-app.use('/api/categories', categoriesRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/health', healthRoutes);
 app.use('/api/catalog', catalogRoutes);
+app.use('/api/health', healthRoutes);
+app.use('/api/categories', categoriesRoutes);
+app.use('/api/products', productsRoutes);
+app.use('/api/locations', locationRoutes);
 
 // Add request logging middleware
 app.use((req, res, next) => {
@@ -224,6 +226,7 @@ app.get('/', (req, res) => {
       categories: '/api/categories',
       auth: '/api/auth',
       catalog: '/api/catalog',
+      locations: '/api/locations',
     },
   });
 });

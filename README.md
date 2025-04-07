@@ -160,6 +160,33 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 This repository contains the serverless backend API for JoyLabs, primarily focused on OAuth integration with Square for mobile applications. The system is built on AWS Lambda with Express.js, using the Serverless Framework for deployment and infrastructure management.
 
+## API Versioning Strategy
+
+The JoyLabs API follows a consistent URL pattern using the `/api/*` prefix for all endpoints, which decouples our API structure from Square's versioning.
+
+### Square API Versioning
+
+- Square uses `/v2/*` endpoints in their API (e.g., `/v2/locations`)
+- Our services internally track Square's API version (currently v2)
+- We handle version translation internally in service files
+
+This approach offers several advantages:
+
+1. Frontend applications use a consistent `/api/*` pattern
+2. We can update Square API versions (v2 → v3) without changing frontend code
+3. We maintain full control over our API evolution independent of Square
+
+### Implementation Details
+
+Square API version is centralized in each service file:
+
+```javascript
+// In service files (e.g., src/services/location.js)
+const SQUARE_API_VERSION = 'v2';
+```
+
+This makes future version migrations easier to manage and test.
+
 ## Architecture
 
 The application follows a serverless architecture pattern:
@@ -424,6 +451,7 @@ The mobile app needs to implement the following:
    ```
 
 5. **Handle Deep Link Callback**:
+
    ```javascript
    function handleDeepLink(url) {
      if (url.startsWith('joylabs://square-callback')) {
@@ -492,3 +520,329 @@ _This documentation is maintained by the JoyLabs Backend Team_
 
 - **Node.js 22 Migration**: The codebase has been updated to run on Node.js 22. See [Node.js 22 Migration Guide](docs/nodejs22-migration.md) for details.
 - **Square SDK v42**: Updated from v35.1.0 to v42.0.0. API property access patterns have been updated across the codebase.
+
+## Frontend Catalog Synchronization Guide
+
+### Introduction
+
+This guide outlines the process for a React Native frontend application to download the entire merchant catalog from the JoyLabs backend API and store it locally in an SQLite database. The backend acts as a proxy to the Square Catalog API, providing a consistent interface (`/api/*`) regardless of Square's underlying API version.
+
+### Backend API Overview
+
+1.  **Base URL**: `https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production`
+2.  **Authentication**: All requests to protected endpoints require a JSON Web Token (JWT) provided in the `Authorization` header.
+    ```
+    Authorization: Bearer <YOUR_JWT_TOKEN>
+    ```
+    Ensure your frontend authentication flow provides this token before attempting catalog sync.
+3.  **Endpoint Naming**: All JoyLabs backend endpoints follow the `/api/*` convention.
+4.  **Relevant Endpoint**: `GET /api/catalog/list`
+5.  **Square API Versioning**: The backend internally handles interactions with Square's `v2` API, currently using the `2025-03-19` API version header. The frontend does **not** need to worry about Square's `/v2` paths or specific version headers; use the JoyLabs `/api/*` endpoints.
+
+### Catalog Retrieval Process (`GET /api/catalog/list`)
+
+To download the entire catalog, which can be large (18,000+ items), you must use pagination. The backend API endpoint `GET /api/catalog/list` proxies Square's `ListCatalog` functionality, which uses cursor-based pagination.
+
+#### Request Parameters
+
+- `limit` (optional, integer): The maximum number of objects to return per page. The backend defaults to `100` if not specified. While Square's underlying API might support higher limits (potentially up to 1000 for some endpoints), requesting **200-500** per page is a reasonable starting point for performance and stability. Adjust based on testing.
+- `cursor` (optional, string): The pagination cursor returned from the previous request. Omit this for the _first_ request.
+- `types` (optional, string): Comma-separated list of `CatalogObject` types to retrieve (e.g., `ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE`). If omitted, the backend defaults to `ITEM,CATEGORY`. For a full sync, you likely want most, if not all, available types.
+
+**Example Initial Request:**
+
+```http
+GET /api/catalog/list?limit=500&types=ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE HTTP/1.1
+Host: gki8kva7e3.execute-api.us-west-1.amazonaws.com
+Authorization: Bearer <YOUR_JWT_TOKEN>
+```
+
+**Example Subsequent Request (with cursor):**
+
+```http
+GET /api/catalog/list?limit=500&types=ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE&cursor=CURSOR_VALUE_FROM_PREVIOUS_RESPONSE HTTP/1.1
+Host: gki8kva7e3.execute-api.us-west-1.amazonaws.com
+Authorization: Bearer <YOUR_JWT_TOKEN>
+```
+
+#### Success Response (200 OK)
+
+The backend will return a JSON object with the following structure:
+
+```json
+{
+  "success": true,
+  "objects": [
+    // Array of Square CatalogObjects
+    {
+      "type": "ITEM",
+      "id": "SQUARE_ITEM_ID_1",
+      "updated_at": "2024-04-03T10:00:00Z",
+      "version": 1617444000000,
+      "is_deleted": false,
+      "present_at_all_locations": true,
+      "item_data": {
+        "name": "Coffee",
+        "description": "...",
+        "abbreviation": "Cof",
+        "category_id": "CATEGORY_ID",
+        "tax_ids": ["TAX_ID_1"],
+        "variations": [
+          {
+            "type": "ITEM_VARIATION",
+            "id": "ITEM_VARIATION_ID_1",
+            // ... other variation data
+            "item_variation_data": {
+              "item_id": "SQUARE_ITEM_ID_1",
+              "name": "Small",
+              "sku": "COF-SML",
+              "pricing_type": "FIXED_PRICING",
+              "price_money": {
+                "amount": 300,
+                "currency": "USD"
+              }
+              // ... other variation pricing data
+            }
+          }
+        ],
+        "modifier_list_info": [
+          {
+            "modifier_list_id": "MODIFIER_LIST_ID_1",
+            "enabled": true
+            // ... other modifier info
+          }
+        ],
+        "image_ids": ["IMAGE_ID_1"]
+        // ... other item data
+      }
+    },
+    {
+      "type": "CATEGORY",
+      "id": "CATEGORY_ID"
+      // ... category data
+    },
+    {
+      "type": "MODIFIER_LIST",
+      "id": "MODIFIER_LIST_ID_1"
+      // ... modifier list data
+    }
+    // ... more objects
+  ],
+  "cursor": "NEXT_PAGE_CURSOR_VALUE" // Present if more pages exist, absent/null otherwise
+}
+```
+
+**Key Fields:**
+
+- `success`: Always `true` for successful requests.
+- `objects`: An array containing the fetched `CatalogObject` instances.
+- `cursor`: A string token. If present, use this value in the `cursor` query parameter of your next request to fetch the subsequent page. If absent or null, you have reached the end of the catalog.
+
+#### Error Response (4xx/5xx)
+
+If an error occurs, the backend returns:
+
+```json
+{
+  "success": false,
+  "message": "Error description (e.g., Failed to list catalog items)",
+  "error": {
+    // May contain more specific Square error details
+    "code": "SQUARE_ERROR_CODE", // e.g., "UNAUTHORIZED", "RATE_LIMITED"
+    "detail": "More detailed error message from Square",
+    "category": "SQUARE_ERROR_CATEGORY" // e.g., "AUTHENTICATION_ERROR"
+  }
+  // Or sometimes just a simpler error string:
+  // "error": "Error details string"
+}
+```
+
+**Common Errors:**
+
+- **401 Unauthorized**: Invalid or missing JWT token.
+- **429 Too Many Requests**: Backend rate limit hit. Implement exponential backoff and retry.
+- **5xx Server Error**: An issue occurred on the backend. Retry after a delay.
+
+### Frontend Implementation Strategy
+
+1.  **Prerequisites**:
+
+    - React Native project setup (likely with Expo).
+    - SQLite library (e.g., `expo-sqlite`).
+    - Authentication flow implemented to obtain a JWT.
+    - API client (e.g., `axios` or native `fetch`).
+
+2.  **Database Schema**: Design your local SQLite schema to store the catalog data. You'll likely need tables for:
+
+    - `items`
+    - `item_variations`
+    - `categories`
+    - `modifier_lists`
+    - `modifiers`
+    - `taxes`
+    - `discounts`
+    - `images`
+    - Consider tables for relationships (e.g., `item_modifier_lists`, `item_taxes`).
+    - Store the Square `id`, `version`, and `updated_at` timestamps for potential future delta syncs.
+
+3.  **Fetching Logic (Pagination Loop)**:
+
+    - Initialize `cursor = null`.
+    - Start a loop (e.g., `do...while(cursor)`).
+    - Inside the loop:
+      - Construct the API request URL: `GET /api/catalog/list`. Add `limit` and desired `types`. If `cursor` is not null, add `&cursor={cursor}`.
+      - Make the authenticated API call.
+      - **Handle Errors**: Check for non-200 responses. Implement retry logic, especially exponential backoff for 429 errors. Log errors. If an unrecoverable error occurs (like 401), stop the sync.
+      - **Process Success Response**:
+        - Extract the `objects` array and the new `cursor` value from the response data.
+        - Store/Update the `objects` in your SQLite database (see next step).
+        - Update the `cursor` variable with the value from the response.
+    - The loop continues as long as the `cursor` returned is not null or empty.
+
+4.  **Data Processing and Storage**:
+
+    - Iterate through the `objects` array received in each API response.
+    - Use the `type` field of each object to determine which SQLite table to insert/update data into.
+    - **Use Transactions**: Wrap database insertions/updates for each page of objects within a single SQLite transaction for significantly better performance.
+    - **Upsert Logic**: Implement an "upsert" (update or insert) mechanism. Check if a record with the Square `id` already exists in your local table. If yes, update it (potentially checking the `version` or `updated_at` timestamp). If no, insert a new record.
+
+5.  **Background Task**: Downloading 18,000+ items will take time. Perform this synchronization in a background task/thread to avoid blocking the UI. Use libraries like `expo-task-manager` or dedicated background job libraries.
+
+6.  **UI/UX**:
+
+    - Provide clear feedback to the user that a background sync is in progress (e.g., a loading indicator, progress bar - though estimating total progress is tricky with cursors).
+    - Notify the user upon completion or if an unrecoverable error occurs.
+    - Consider allowing the user to trigger the sync manually or schedule it periodically.
+
+7.  **Performance & Memory**:
+    - Processing large arrays of objects can consume memory. Process data in chunks if necessary.
+    - Ensure your SQLite queries are optimized. Use indexes on frequently queried columns (like `id`).
+    - Batch database operations within transactions.
+
+### Conceptual Code Example (React Native Fetch Loop)
+
+```javascript
+import * as SQLite from 'expo-sqlite';
+import axios from 'axios'; // Or use fetch
+
+const API_BASE_URL = 'https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production';
+const DB_NAME = 'catalog.db';
+
+// --- Database Setup (Simplified) ---
+async function openDatabase() {
+  // Check if DB exists, create tables if not
+  // ...
+  return SQLite.openDatabase(DB_NAME);
+}
+
+async function storeObjectsInDB(db, objects) {
+  return new Promise((resolve, reject) => {
+    db.transaction(
+      tx => {
+        objects.forEach(obj => {
+          // --- IMPORTANT: Implement robust UPSERT logic here ---
+          // Based on obj.type, insert/update into the correct table
+          // Example for items (highly simplified):
+          if (obj.type === 'ITEM') {
+            tx.executeSql(
+              `INSERT OR REPLACE INTO items (id, version, name, data_json) VALUES (?, ?, ?, ?);`,
+              [obj.id, obj.version, obj.item_data?.name || 'Unknown', JSON.stringify(obj)],
+              () => {}, // Success callback per statement
+              (_, error) => {
+                console.error('SQLite Insert/Replace Error:', error);
+                // Returning true rolls back the transaction
+                return true;
+              }
+            );
+          }
+          // Add similar logic for CATEGORY, MODIFIER_LIST, etc.
+        });
+      },
+      error => {
+        // Transaction error
+        console.error('SQLite Transaction Error:', error);
+        reject(error);
+      },
+      () => {
+        // Transaction success
+        resolve();
+      }
+    );
+  });
+}
+
+// --- Sync Function ---
+async function syncFullCatalog(authToken) {
+  const db = await openDatabase();
+  let cursor = null;
+  let page = 1;
+  const limit = 200; // Adjust as needed
+  const typesToFetch = 'ITEM,CATEGORY,MODIFIER_LIST,MODIFIER,TAX,DISCOUNT,IMAGE'; // Be specific
+
+  console.log('Starting full catalog sync...');
+
+  try {
+    do {
+      console.log(`Fetching page ${page}... Cursor: ${cursor ? 'Present' : 'None'}`);
+      const params = {
+        limit: limit,
+        types: typesToFetch,
+      };
+      if (cursor) {
+        params.cursor = cursor;
+      }
+
+      const response = await axios.get(`${API_BASE_URL}/api/catalog/list`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+        params: params,
+      });
+
+      if (response.data && response.data.success) {
+        const objects = response.data.objects || [];
+        const nextCursor = response.data.cursor;
+
+        console.log(
+          `Received ${objects.length} objects. Next cursor: ${nextCursor ? 'Present' : 'None'}`
+        );
+
+        if (objects.length > 0) {
+          // Store fetched objects in the database within a transaction
+          await storeObjectsInDB(db, objects);
+          console.log(`Stored ${objects.length} objects from page ${page}.`);
+        }
+
+        cursor = nextCursor; // Update cursor for the next iteration
+        page++;
+      } else {
+        console.error('API Error:', response.data?.message || 'Unknown API error');
+        throw new Error(response.data?.message || 'Catalog sync failed');
+      }
+
+      // Optional: Add a small delay between requests to be kind to the API
+      // await new Promise(resolve => setTimeout(resolve, 200));
+    } while (cursor);
+
+    console.log('Full catalog sync completed successfully!');
+  } catch (error) {
+    console.error('Catalog Sync Failed:', error);
+    if (error.response) {
+      // Handle specific HTTP errors (401, 429, 5xx)
+      console.error('Error Status:', error.response.status);
+      console.error('Error Data:', error.response.data);
+      // Implement retry logic for 429/5xx here
+    }
+    // Notify user or log error appropriately
+  }
+}
+
+// --- Usage ---
+// const token = getMyAuthToken();
+// syncFullCatalog(token); // Run this in a background task
+```
+
+### Important Considerations
+
+- **Delta Syncs**: This guide covers a _full_ sync using the `GET /api/catalog/list` endpoint. For subsequent, more efficient updates (delta syncs), the backend would ideally expose functionality proxying Square's `SearchCatalogObjects` API, allowing filtering by `begin_time`. Alternatively, reacting to `catalog.version.updated` webhooks combined with `BatchRetrieveCatalogObjects` is another strategy, though this requires backend webhook processing. Discuss with the backend team if delta sync functionality via `SearchCatalogObjects` is available or planned.
+- **Error Robustness**: Build robust error handling and retry mechanisms, especially for network issues and rate limiting (429).
+- **Data Consistency**: Ensure your database schema and upsert logic correctly handle relationships between different catalog object types (e.g., items linking to categories, variations linking to items, modifiers linking to modifier lists).
+- **Testing**: Test thoroughly with a smaller dataset first, then scale up. Monitor memory usage and performance during the sync process.

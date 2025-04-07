@@ -12,6 +12,10 @@ const webCrypto = require('../utils/webCrypto');
 const fetchHelpers = require('../utils/fetchHelpers');
 const { createErrorWithCause } = require('../utils/errorHandling');
 
+// Square API versions - centralized for easy updates
+const SQUARE_API_VERSION = 'v2'; // URL version (e.g., /v2/locations)
+const SQUARE_API_HEADER_VERSION = '2025-03-19'; // API version header
+
 // Initialize AWS clients
 const secretsManager = new SecretsManagerClient({ region: 'us-west-1' });
 
@@ -27,6 +31,7 @@ const CACHE_TTL_CONFIG = {
   merchantInfo: 5 * 60 * 1000, // 5 minutes for merchant info
   catalogCategories: 30 * 60 * 1000, // 30 minutes for catalog categories
   catalogItems: 5 * 60 * 1000, // 5 minutes for catalog items
+  locations: 30 * 60 * 1000, // 30 minutes for locations
   other: 60 * 1000, // 1 minute default
 };
 
@@ -384,7 +389,7 @@ async function getMerchantInfo(accessToken) {
 
       // Use square API helpers for better retry logic
       response = await squareApiHelpers.executeWithRetry(
-        async client => client.locationsApi.retrieveLocation('me'),
+        async client => client.locations.retrieveLocation('me'),
         client,
         authRetryConfig
       );
@@ -734,12 +739,12 @@ async function getMerchantInfoWithFetch(accessToken) {
     const headers = {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
-      'Square-Version': '2023-12-13', // Use latest Square API version
+      'Square-Version': SQUARE_API_HEADER_VERSION, // Use latest Square API version
     };
 
     // Fetch merchant data using native fetch API
     const merchantData = await fetchHelpers.fetchJson(
-      'https://connect.squareup.com/v2/merchants/me',
+      `https://connect.squareup.com/${SQUARE_API_VERSION}/merchants/me`,
       { headers },
       10000 // 10 second timeout
     );
@@ -750,7 +755,7 @@ async function getMerchantInfoWithFetch(accessToken) {
 
       // Get main location info
       const locationResponse = await fetchHelpers.fetchJson(
-        'https://connect.squareup.com/v2/locations',
+        `https://connect.squareup.com/${SQUARE_API_VERSION}/locations`,
         { headers },
         10000
       );
@@ -829,4 +834,7 @@ module.exports = {
   cacheResponse,
   CACHE_TTL_CONFIG,
   getMerchantInfoWithFetch,
+  // Export version constants
+  SQUARE_API_VERSION,
+  SQUARE_API_HEADER_VERSION,
 };

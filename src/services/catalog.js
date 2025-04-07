@@ -2,12 +2,18 @@
  * Square Catalog Service
  * Provides methods to interact with Square Catalog API
  */
+const axios = require('axios');
 const { getSquareClient } = require('./square');
 const { handleSquareError } = require('../utils/errorHandling');
 const CatalogItem = require('../models/CatalogItem');
 const uuid = require('uuid');
 const squareService = require('./square');
 const squareErrorHandler = require('../utils/errorHandling');
+
+// Square API version configuration - centralized for easy updates
+const SQUARE_API_VERSION = 'v2';
+// Square API header version - updated to latest available version
+const SQUARE_API_HEADER_VERSION = '2025-03-19';
 
 // Default catalog image size dimensions
 const DEFAULT_IMAGE_SIZE = { width: 300, height: 300 };
@@ -114,9 +120,8 @@ async function getCatalogItem(accessToken, itemId) {
   try {
     console.log(`Getting catalog item: ${itemId}`);
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalog;
 
-    const response = await catalogApi.retrieveCatalogObject(itemId, true);
+    const response = await client.catalog.retrieveCatalogObject(itemId, true);
 
     return {
       success: true,
@@ -239,7 +244,6 @@ async function createOrUpdateCatalogItem(accessToken, itemData) {
   try {
     console.log('Creating/updating catalog item in Square');
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalog;
 
     const idempotencyKey = itemData.idempotencyKey || uuid.v4();
     const catalogObject = prepareCatalogObject(itemData);
@@ -252,7 +256,7 @@ async function createOrUpdateCatalogItem(accessToken, itemData) {
       object: catalogObject,
     };
 
-    const response = await catalogApi.upsertCatalogObject(request);
+    const response = await client.catalog.upsertCatalogObject(request);
 
     // Store reference in our database
     try {
@@ -295,9 +299,8 @@ async function deleteCatalogItem(accessToken, itemId) {
   try {
     console.log(`Deleting catalog item: ${itemId}`);
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalog;
 
-    const response = await catalogApi.deleteCatalogObject(itemId);
+    const response = await client.catalog.deleteCatalogObject(itemId);
 
     // Remove from our database if it exists
     try {
@@ -426,148 +429,76 @@ async function searchCatalogItems(accessToken, searchParams = {}) {
       JSON.stringify(searchParams, null, 2)
     );
 
-    // WORKAROUND: We'll bypass the Square SDK for this operation since it's not
-    // correctly handling the query parameter formatting
+    // Create the request body based on searchParams, converting snake_case to camelCase if needed
+    const searchRequest = {};
 
-    const axios = require('axios');
+    // Only add parameters that are provided
+    if (searchParams.objectTypes || searchParams.object_types) {
+      searchRequest.objectTypes = searchParams.objectTypes || searchParams.object_types;
+    }
 
-    // Create a new request object to avoid modifying the original
-    let searchRequest = {
-      object_types: searchParams.object_types || ['ITEM'],
-      limit: searchParams.limit || 100,
-      include_deleted_objects: searchParams.include_deleted_objects || false,
-      include_related_objects: searchParams.include_related_objects || false,
-    };
+    if (searchParams.limit) {
+      searchRequest.limit = parseInt(searchParams.limit);
+    }
 
     if (searchParams.cursor) {
       searchRequest.cursor = searchParams.cursor;
     }
 
-    if (searchParams.begin_time) {
-      searchRequest.begin_time = searchParams.begin_time;
+    if (searchParams.includeDeletedObjects || searchParams.include_deleted_objects) {
+      searchRequest.includeDeletedObjects =
+        searchParams.includeDeletedObjects || searchParams.include_deleted_objects;
     }
 
-    if (searchParams.include_category_path_to_root) {
-      searchRequest.include_category_path_to_root = searchParams.include_category_path_to_root;
+    if (searchParams.includeRelatedObjects || searchParams.include_related_objects) {
+      searchRequest.includeRelatedObjects =
+        searchParams.includeRelatedObjects || searchParams.include_related_objects;
     }
 
-    // Always ensure we have a valid query type - for empty searches,
-    // use exact_query with a value that will match most items
-    searchRequest.query = {
-      exact_query: {
-        attribute_name: 'name',
-        attribute_value: '.', // Use a very common character to match almost everything
+    if (searchParams.beginTime || searchParams.begin_time) {
+      searchRequest.beginTime = searchParams.beginTime || searchParams.begin_time;
+    }
+
+    if (searchParams.includeCategoryPathToRoot || searchParams.include_category_path_to_root) {
+      searchRequest.includeCategoryPathToRoot =
+        searchParams.includeCategoryPathToRoot || searchParams.include_category_path_to_root;
+    }
+
+    // Keep the original query if provided
+    if (searchParams.query) {
+      searchRequest.query = searchParams.query;
+      console.log('Using query from input:', Object.keys(searchParams.query)[0]);
+    }
+
+    console.log(
+      'Final search request being sent to Square:',
+      JSON.stringify(searchRequest, null, 2)
+    );
+
+    // Use executeSquareRequest to handle retries and rate limiting
+    const result = await squareService.executeSquareRequest(
+      async client => {
+        return client.catalog.searchCatalogObjects(searchRequest);
       },
-    };
+      accessToken,
+      'catalog-api'
+    );
 
-    // Check if query parameter has valid data to use
-    if (searchParams.query && typeof searchParams.query === 'object') {
-      const validQueryTypes = [
-        'prefix_query',
-        'exact_query',
-        'sorted_attribute_query',
-        'text_query',
-        'item_query',
-        'item_variation_query',
-        'items_for_tax_query',
-        'items_for_modifier_list_query',
-        'items_for_item_options',
-      ];
-
-      // Special handling for text_query with incorrect format
-      if (searchParams.query.text_query) {
-        if (searchParams.query.text_query.query !== undefined) {
-          // Frontend sent text_query with 'query' field instead of 'keywords' array
-          // Convert it to proper format or use exact_query if empty
-          const queryText = searchParams.query.text_query.query;
-
-          if (queryText && queryText.trim() !== '') {
-            // If there's actual text, convert to proper keywords array
-            searchRequest.query = {
-              text_query: {
-                keywords: [queryText.trim()],
-              },
-            };
-            console.log(`Converted text_query.query to keywords array: [${queryText.trim()}]`);
-          } else {
-            // Empty query text, use our reliable exact_query approach
-            console.log('Empty text_query.query detected, using exact_query instead');
-            // Keep the default exact_query from above
-          }
-        } else if (
-          searchParams.query.text_query.keywords &&
-          Array.isArray(searchParams.query.text_query.keywords) &&
-          searchParams.query.text_query.keywords.length > 0
-        ) {
-          // Already has a correctly formatted keywords array
-          searchRequest.query = {
-            text_query: {
-              keywords: searchParams.query.text_query.keywords,
-            },
-          };
-          console.log(
-            'Using provided text_query keywords:',
-            searchParams.query.text_query.keywords
-          );
-        } else {
-          // Malformed text_query, use our reliable exact_query approach
-          console.log('Malformed text_query detected, using exact_query instead');
-          // Keep the default exact_query from above
-        }
-      } else {
-        // Not a text_query, check other query types
-        for (const queryType of validQueryTypes) {
-          if (searchParams.query[queryType] && queryType !== 'text_query') {
-            // Use the first valid non-text query type found
-            searchRequest.query = {
-              [queryType]: searchParams.query[queryType],
-            };
-            console.log(`Using query type ${queryType} from input`);
-            break;
-          }
-        }
-      }
-    }
-
-    console.log('Final search request:', JSON.stringify(searchRequest, null, 2));
-
-    // Make direct API call to Square
-    const response = await axios({
-      method: 'post',
-      url: 'https://connect.squareup.com/v2/catalog/search',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'Square-Version': '2023-12-13',
-      },
-      data: searchRequest,
+    console.log('=== REQUEST BOUNDARY: searchCatalogItems END ===');
+    console.log('Results retrieved:', {
+      count: result.result.objects?.length || 0,
+      cursor: result.result.cursor ? 'Present' : 'None',
     });
-
-    console.log('=== REQUEST BOUNDARY: searchCatalogItems END (Success) ===');
 
     return {
       success: true,
-      objects: response.data.objects || [],
-      related_objects: response.data.related_objects || [],
-      cursor: response.data.cursor,
-      latest_time: response.data.latest_time,
+      objects: result.result.objects || [],
+      relatedObjects: result.result.relatedObjects || [],
+      cursor: result.result.cursor,
     };
   } catch (error) {
-    console.error('=== REQUEST BOUNDARY: searchCatalogItems END (Error) ===');
-    console.error('Error searching catalog objects:', error.response ? error.response.data : error);
-
-    if (error.response && error.response.data) {
-      return {
-        success: false,
-        error: {
-          message: error.response.data.errors?.[0]?.detail || 'Failed to search catalog objects',
-          code: error.response.data.errors?.[0]?.code || 'UNKNOWN_ERROR',
-          details: error.response.data.errors || [],
-        },
-      };
-    }
-
-    return handleSquareError(error, 'Failed to search catalog objects');
+    console.error('Error searching catalog items:', error);
+    return handleSquareError(error, 'Failed to search catalog items');
   }
 }
 
@@ -582,9 +513,8 @@ async function batchRetrieveCatalogObjects(accessToken, objectIds, includeRelate
   try {
     console.log('Batch retrieving catalog objects');
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalog;
 
-    const response = await catalogApi.batchRetrieveCatalogObjects({
+    const response = await client.catalog.batchRetrieveCatalogObjects({
       objectIds,
       includeRelatedObjects,
     });
@@ -647,18 +577,13 @@ async function batchDeleteCatalogObjects(accessToken, objectIds) {
 
     console.log(`Batch deleting ${objectIds.length} catalog objects`);
     const client = getSquareClient(accessToken);
-    const catalogApi = client.catalog;
 
     // Square API requires a BatchDeleteCatalogObjectsRequest object
     const request = {
       objectIds: objectIds,
     };
 
-    const response = await squareService.executeSquareRequest(
-      async client => client.catalog.batchDeleteCatalogObjects(request),
-      accessToken,
-      'catalog-api'
-    );
+    const response = await client.catalog.batchDeleteCatalogObjects(request);
 
     console.log('Successfully deleted catalog objects');
     console.log(
@@ -814,11 +739,11 @@ async function getCatalogCategories(accessToken) {
     console.log('Making API call to Square for categories...');
     const response = await axios({
       method: 'post',
-      url: 'https://connect.squareup.com/v2/catalog/search',
+      url: `https://connect.squareup.com/${SQUARE_API_VERSION}/catalog/search`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
-        'Square-Version': '2023-12-13',
+        'Square-Version': SQUARE_API_HEADER_VERSION,
       },
       data: searchRequest,
     });
@@ -861,11 +786,11 @@ async function getCatalogCategories(accessToken) {
 
       const fallbackResponse = await axios({
         method: 'post',
-        url: 'https://connect.squareup.com/v2/catalog/search',
+        url: `https://connect.squareup.com/${SQUARE_API_VERSION}/catalog/search`,
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          'Square-Version': '2023-12-13',
+          'Square-Version': SQUARE_API_HEADER_VERSION,
         },
         data: fallbackRequest,
       });
@@ -964,11 +889,11 @@ async function listCatalogCategories(accessToken, options = {}) {
     // Make direct API call to avoid SDK parameter order issues
     const response = await axios({
       method: 'get',
-      url: 'https://connect.squareup.com/v2/catalog/list',
+      url: `https://connect.squareup.com/${SQUARE_API_VERSION}/catalog/list`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
-        'Square-Version': '2023-12-13',
+        'Square-Version': SQUARE_API_HEADER_VERSION,
       },
       params: {
         types: 'CATEGORY',
