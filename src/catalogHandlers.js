@@ -167,7 +167,7 @@ app.get('/v2/catalog/list', protect, async (req, res) => {
     const token = req.user.squareAccessToken;
 
     // Parse query parameters
-    const { types = 'ITEM', limit = 100, cursor } = req.query;
+    const { types = 'ITEM', limit = 1000, cursor } = req.query;
 
     // Make direct API call to Square
     const axios = require('axios');
