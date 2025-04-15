@@ -192,7 +192,7 @@ app.get('/v2/catalog/list', protect, async (req, res) => {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
-        'Square-Version': '2023-12-13',
+        'Square-Version': squareService.SQUARE_API_HEADER_VERSION,
       },
       params: {
         types: Array.isArray(types) ? types.join(',') : types,

@@ -429,7 +429,7 @@ async function getMerchantInfo(accessToken) {
             headers: {
               Authorization: `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
-              'Square-Version': '2023-12-13',
+              'Square-Version': SQUARE_API_HEADER_VERSION,
             },
           });
 

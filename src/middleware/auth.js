@@ -105,6 +105,10 @@ const authenticate = async (req, res, next) => {
 
     // Extract token
     const token = authHeader.split(' ')[1];
+    console.log(
+      '[DEBUG] Auth Middleware: Extracted token preview:',
+      token ? `${token.substring(0, 5)}...${token.substring(token.length - 5)}` : 'null or empty'
+    );
     if (!token) {
       console.log('Empty token provided');
       return res.status(401).json({
