@@ -2,9 +2,9 @@
 
 ## Project Overview
 - Serverless backend API for JoyLabs
-- Primary focus: Square OAuth integration for mobile applications
+- Primary focus: Square OAuth integration for mobile applications. Catalog endpoints act as authenticated proxies to Square.
 - Built with: AWS Lambda, Express.js, Serverless Framework v4
-- Node.js version: 22.x (required)
+- Node.js version: 22.x (required) - Note: Layers might be nodejs20.x temporarily.
 - Environment: Production-only (no sandbox/test modes)
 
 ## Key Dependencies
@@ -16,8 +16,8 @@
 
 ## Architecture Components
 1. Lambda Functions:
-   - api: Main Express application (src/index.js)
-   - catalog: Product catalog management (src/catalogHandlers.js)
+   - api: Main Express application for general routes (health, etc.) (src/index.js)
+   - catalog: **Authenticated proxy for Square Catalog API operations** (src/catalogHandlers.js)
    - webhooks: Square webhook handling (src/webhookHandlers.js)
    - oauth: Square OAuth flow (src/oauthHandlers.js)
 
@@ -27,16 +27,16 @@
      - States table (OAuth states)
      - Sessions table (Express sessions)
      - Users table
-     - Catalog tables (products, categories)
      - Merchants table
      - Webhooks table
+     - ~~Catalog tables (products, categories)~~ - No longer used for primary catalog data.
    - Secrets Manager (Square credentials)
    - CloudWatch (logging)
 
 3. Lambda Layers:
    - core: Base dependencies
    - apiDeps: API-specific modules
-   - catalogDeps: Catalog-specific modules
+   - catalogDeps: Catalog proxy handler dependencies
    - webhooksDeps: Webhook handling modules
    - oauthDeps: OAuth-specific modules
    - square: Square SDK and related dependencies
@@ -48,13 +48,14 @@
 - Memory: 512MB per function
 
 ## Development Guidelines
-1. Always use TypeScript with strict typing
+1. Always use TypeScript with strict typing (Primary language)
 2. Use AWS SDK v3 only
 3. Implement proper error handling and logging
-4. Ensure proper session management
+4. Ensure proper session management (especially for OAuth)
 5. Follow security best practices for OAuth flows
 6. Use production endpoints only (no sandbox)
 7. Do not push or commit to git unless asked
+8. **Catalog Logic:** The `catalog` function should only contain proxy logic (authentication, header forwarding, request/response pass-through). Do not add business logic here; interact directly with the Square API via these proxied endpoints from the frontend.
 
 ## Node.js 22 Security Features
 1. WebCrypto API for PKCE implementation in src/utils/webCrypto.js
@@ -71,68 +72,64 @@
 
 ## Common Issues and Solutions
 1. Session issues: Check SESSION_SECRET environment variable
-2. API rate limiting: Implement exponential backoff
-3. Square credential refresh: Use src/services/square.js refreshAccessToken
+2. API rate limiting: Implement exponential backoff (especially on frontend if making many catalog calls)
+3. Square credential refresh: Use src/services/square.js refreshAccessToken (handled via OAuth flow)
 4. Memory errors: Increase Lambda memory or optimize dependencies
 5. Cold starts: Optimize layers and implement warming
 6. TypeScript errors: Check tsconfig.json and types
+7. **Catalog Errors:** Errors from `/v2/catalog/*` endpoints are likely direct Square API errors. Check Square documentation based on the error response passed through the proxy.
 
 ## Deployment Workflow
 1. Ensure all lint checks pass: `npm run lint`
 2. Run local tests: `npm test`
 3. Deploy layers first: `npm run deploy:layers`
-4. Deploy API: `npm run deploy:function:api`
-5. Verify AWS Lambda console for successful deployment
-6. Check CloudWatch logs for any runtime errors
+4. Deploy specific function if needed: `npm run deploy:function:catalog` or `npm run deploy:function:oauth`, etc.
+5. Full Deploy: `npm run deploy`
+6. Verify AWS Lambda console for successful deployment
+7. Check CloudWatch logs for any runtime errors
 
 ## Square's usage of camelCase vs snake_case
 
-The Square API uses camelCase for its SDKs and Node.js API, while the API reference documentation and webhooks use snake_case. 
+The Square API uses camelCase for its Node.js SDK (used internally by the backend, especially in `square.js`), while the **API reference documentation, webhooks, and API JSON responses use snake_case.**
 
-Here's a breakdown: 
-API Reference/Webhooks: Use snake\_case (e.g., payment_status).
-SDKs (including Node.js): Use camelCase (e.g., paymentStatus).
-Confusion: The discrepancy between the API reference and the actual API can be confusing, as the reference uses snake\_case while the SDKs expect camelCase.
+Here's a breakdown:
+- API Reference/Webhooks: Use snake\_case (e.g., `payment_status`).
+- Node.js SDK (Internal Backend): Uses camelCase (e.g., `paymentStatus`).
+- **API Responses (Frontend Perspective):** Responses received from the backend for **proxied `/v2/catalog/*` endpoints will contain `snake_case` keys**, as they directly reflect the Square API JSON response.
 
 Example:
-API Reference/Webhooks/JSON response: payment_status
-SDK/Node.js: paymentStatus
+- API Reference/Webhook/JSON response: `payment_status`
+- SDK/Node.js Internal Usage: `paymentStatus`
+- Frontend receives from `/v2/catalog/*`: `{ "some_field": ... }`
 
 ## Square endpoints caveats:
-Square's endpoints are prefixed with /v2/ and our frontend uses a url like this: https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/v2/locations or https://gki8kva7e3.execute-api.us-west-1.amazonaws.com/production/v2/merchants/list 
+Square's external API endpoints are often prefixed with `/v2/` (e.g., `https://connect.squareup.com/v2/catalog/list`). Our backend API Gateway reflects this structure for proxied catalog endpoints.
 
 ## API Endpoint Strategy
 
-Despite Square using `/v2/` prefixes, we maintain a consistent approach:
+Our backend API uses a mixed strategy for endpoint paths:
 
-1. **All JoyLabs endpoints use `/api/*` prefix**:
-   - `/api/locations` - NOT `/v2/locations`
-   - `/api/catalog` - NOT `/v2/catalog`
-   - `/api/products` - NOT `/v2/products`
+1.  **OAuth & Specific Backend Routes:** Primarily use the `/api/*` prefix.
+    - `/api/auth/connect/url`
+    - `/api/auth/square/callback`
+    - `/api/webhooks/square`
+    - `/api/health`
 
-2. **Square API version handling**:
-   - URL path version is managed internally with `const SQUARE_API_VERSION = 'v2'`
-   - API header version is managed with `const SQUARE_API_HEADER_VERSION = '2025-03-19'`
-   - This dual versioning approach separates URL structure from API behaviors
+2.  **Catalog Operations (Proxied):** Use the `/v2/catalog/*` prefix, mirroring Square's API structure.
+    - `/v2/catalog/list`
+    - `/v2/catalog/object`
+    - `/v2/catalog/search`
+    - `/v2/catalog/item/{id}` (Maps to Square's `/v2/catalog/object/{id}`)
+    - `/v2/catalog/list-categories` (Convenience, maps to `/v2/catalog/list?types=CATEGORY`)
+    - *This approach ensures the frontend interacts with paths that closely match the underlying Square API structure for catalog operations.* Frontend developers should refer to Square's Catalog API documentation for request/response formats for these endpoints.
 
-3. **Benefits**:
-   - Frontend code doesn't need to change when Square updates API versions
-   - Consistent API structure across our entire backend
-   - Clean separation between our API and Square's version changes
-   - Easier versioning control for our own API
+3.  **Square API version handling**:
+    - API header version (`Square-Version`) is consistently managed by the backend proxy for catalog calls (`2025-03-19`).
+    - Internal SDK calls (e.g., in `square.js` for token exchange) also use the correct version header.
 
-4. **Implementation**:
-   - All direct Square API calls use the version constants:
-     ```javascript
-     url: `https://connect.squareup.com/${SQUARE_API_VERSION}/locations`,
-     headers: {
-       'Square-Version': SQUARE_API_HEADER_VERSION
-     }
-     ```
-   - SDK calls set the version via client configuration:
-     ```javascript
-     client.agent.defaultHeaders['Square-Version'] = SQUARE_API_HEADER_VERSION;
-     ```
+4.  **Implementation**:
+    - The `catalogHandlers.js` uses `axios` to directly call Square endpoints, forwarding authentication and ensuring correct headers.
+    - The `oauthHandlers.js` and `square.js` service handle token exchange and client initialization using appropriate headers/SDK configurations.
 
 
 

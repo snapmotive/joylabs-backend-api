@@ -169,6 +169,10 @@ functions:
           method: get
           cors: true
       - http:
+          path: /v2/catalog/object
+          method: post
+          cors: true
+      - http:
           path: /v2/catalog/item/{id}
           method: get
           cors: true
