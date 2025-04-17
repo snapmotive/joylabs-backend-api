@@ -74,7 +74,7 @@ This guide provides instructions and rules for developing the JoyLabs frontend a
 ## Square Integration Details
 
 - **Square App ID:** `sq0idp-WFTYv3An7NPv6ovGFLld1Q`
-- **Square API Version (Handled by Backend):** The backend proxy ensures the correct `Square-Version` header (`2025-03-19`) is used for all proxied requests.
+- **Square API Version (Handled by Backend):** The backend proxy ensures the correct `Square-Version` header (`2025-04-16`) is used for all proxied requests.
 - **Search Endpoint Usage:** `POST /v2/catalog/search` requires a valid Square Catalog Search query body. Ensure `object_types` are included when necessary as per Square documentation.
 
 ## Development Notes

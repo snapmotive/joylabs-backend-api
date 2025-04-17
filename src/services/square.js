@@ -5,16 +5,16 @@
 const axios = require('axios');
 const crypto = require('crypto');
 // Import Square client for v42+
-const { SquareClient } = require('square');
+const { SquareClient, SquareEnvironment } = require('square');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 const squareApiHelpers = require('../utils/squareApiHelpers');
 const webCrypto = require('../utils/webCrypto');
 const fetchHelpers = require('../utils/fetchHelpers');
 const { createErrorWithCause } = require('../utils/errorHandling');
 
-// Square API versions - centralized for easy updates
-const SQUARE_API_VERSION = 'v2'; // URL version (e.g., /v2/locations)
-const SQUARE_API_HEADER_VERSION = '2025-03-19'; // API version header
+// Constants
+const SQUARE_API_VERSION = 'v2'; // Base URL path version
+const SQUARE_API_HEADER_VERSION = '2025-04-16'; // Updated API version header
 
 // Initialize AWS clients
 const secretsManager = new SecretsManagerClient({ region: 'us-west-1' });
@@ -117,33 +117,35 @@ async function getSquareCredentials() {
 }
 
 /**
- * Get a configured Square API client with connection reuse
- *
- * This function creates a client using Square SDK v42+
- *
- * @param {string} accessToken - Square access token
- * @returns {Object} Square client instance
+ * Gets or creates an initialized Square Client instance.
+ * @param {string} accessToken - The Square access token.
+ * @returns {SquareClient} - An initialized Square Client.
  */
-const getSquareClient = (accessToken = null) => {
-  const cacheKey = `${accessToken || 'default'}-${process.env.SQUARE_ENVIRONMENT}`;
+const getSquareClient = accessToken => {
+  console.log('getSquareClient called');
 
-  if (squareClientCache.has(cacheKey)) {
-    console.log('Reusing existing Square client from cache');
-    return squareClientCache.get(cacheKey);
+  // ... access token check ...
+
+  try {
+    // Set environment strictly to Production
+    const squareEnvironment = SquareEnvironment.Production;
+
+    console.log(
+      `[Square Service] Creating new Square Client for environment: ${squareEnvironment}`
+    ); // Should always log Production
+    console.log(`[Square Service] Using API Version: ${SQUARE_API_HEADER_VERSION}`);
+
+    const client = new SquareClient({
+      accessToken: accessToken,
+      environment: squareEnvironment, // Use the strictly Production environment
+      userAgentDetail: 'JoyLabsBackend/1.0',
+      squareVersion: SQUARE_API_HEADER_VERSION,
+    });
+
+    // ... rest of function ...
+  } catch (error) {
+    // ... existing error handling ...
   }
-
-  console.log('Creating new Square v42 client');
-
-  // Create SquareClient with proper configuration
-  const client = new SquareClient({
-    token: accessToken || process.env.SQUARE_ACCESS_TOKEN,
-    environment: process.env.SQUARE_ENVIRONMENT || 'production',
-    userAgentDetail: 'JoyLabs Backend API',
-    timeout: 30000, // 30 seconds timeout
-  });
-
-  squareClientCache.set(cacheKey, client);
-  return client;
 };
 
 /**

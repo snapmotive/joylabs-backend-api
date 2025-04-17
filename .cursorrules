@@ -124,12 +124,52 @@ Our backend API uses a mixed strategy for endpoint paths:
     - *This approach ensures the frontend interacts with paths that closely match the underlying Square API structure for catalog operations.* Frontend developers should refer to Square's Catalog API documentation for request/response formats for these endpoints.
 
 3.  **Square API version handling**:
-    - API header version (`Square-Version`) is consistently managed by the backend proxy for catalog calls (`2025-03-19`).
-    - Internal SDK calls (e.g., in `square.js` for token exchange) also use the correct version header.
+    - API header version (`Square-Version`) is consistently managed by the backend proxy for catalog calls (`2025-04-16`).
+    - Internal SDK calls (e.g., in `square.js` for token exchange) also use the correct version header (`2025-04-16`).
 
 4.  **Implementation**:
-    - The `catalogHandlers.js` uses `axios` to directly call Square endpoints, forwarding authentication and ensuring correct headers.
-    - The `oauthHandlers.js` and `square.js` service handle token exchange and client initialization using appropriate headers/SDK configurations.
+    - The `catalogHandlers.js` uses `axios` to directly call Square endpoints, forwarding authentication and ensuring correct headers (including the `Square-Version`).
+    - The `oauthHandlers.js` and `square.js` service handle token exchange and client initialization using appropriate headers/SDK configurations (including the `Square-Version`).
 
+## Square's usage of camelCase vs snake_case
 
+The Square API uses camelCase for its Node.js SDK (used internally by the backend, especially in `square.js`), while the **API reference documentation, webhooks, and API JSON responses use snake_case.**
 
+Here's a breakdown:
+- API Reference/Webhooks: Use snake\_case (e.g., `payment_status`).
+- Node.js SDK (Internal Backend): Uses camelCase (e.g., `paymentStatus`).
+- **API Responses (Frontend Perspective):** Responses received from the backend for **proxied `/v2/catalog/*` endpoints will contain `snake_case` keys**, as they directly reflect the Square API JSON response.
+
+Example:
+- API Reference/Webhook/JSON response: `payment_status`
+- SDK/Node.js Internal Usage: `paymentStatus`
+- Frontend receives from `/v2/catalog/*`: `{ "some_field": ... }`
+
+## Square endpoints caveats:
+Square's external API endpoints are often prefixed with `/v2/` (e.g., `https://connect.squareup.com/v2/catalog/list`). Our backend API Gateway reflects this structure for proxied catalog endpoints.
+
+## API Endpoint Strategy
+
+Our backend API uses a mixed strategy for endpoint paths:
+
+1.  **OAuth & Specific Backend Routes:** Primarily use the `/api/*` prefix.
+    - `/api/auth/connect/url`
+    - `/api/auth/square/callback`
+    - `/api/webhooks/square`
+    - `/api/health`
+
+2.  **Catalog Operations (Proxied):** Use the `/v2/catalog/*` prefix, mirroring Square's API structure.
+    - `/v2/catalog/list`
+    - `/v2/catalog/object`
+    - `/v2/catalog/search`
+    - `/v2/catalog/item/{id}` (Maps to Square's `/v2/catalog/object/{id}`)
+    - `/v2/catalog/list-categories` (Convenience, maps to `/v2/catalog/list?types=CATEGORY`)
+    - *This approach ensures the frontend interacts with paths that closely match the underlying Square API structure for catalog operations.* Frontend developers should refer to Square's Catalog API documentation for request/response formats for these endpoints.
+
+3.  **Square API version handling**:
+    - API header version (`Square-Version`) is consistently managed by the backend proxy for catalog calls (`2025-04-16`).
+    - Internal SDK calls (e.g., in `square.js` for token exchange) also use the correct version header (`2025-04-16`).
+
+4.  **Implementation**:
+    - The `catalogHandlers.js` uses `axios` to directly call Square endpoints, forwarding authentication and ensuring correct headers (including the `Square-Version`).
+    - The `oauthHandlers.js` and `square.js` service handle token exchange and client initialization using appropriate headers/SDK configurations (including the `Square-Version`).
