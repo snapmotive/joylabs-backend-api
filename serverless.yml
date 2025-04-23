@@ -27,9 +27,7 @@ custom:
   squareCredentialsSecretArn: arn:aws:secretsmanager:${aws:region}:${aws:accountId}:secret:square-credentials-production-*
   webpack:
     webpackConfig: 'webpack.config.js'
-    includeModules: 
-      forceExclude:
-        - aws-sdk   # Exclude aws-sdk v2
+    includeModules: false
     packager: 'npm'
     excludeFiles: '**/*.test.js'
     includeFiles:
@@ -42,12 +40,14 @@ custom:
       - src/catalogHandlers.js
       - src/webhookHandlers.js
       - src/oauthHandlers.js
+    forceExclude:
+      - aws-sdk   # Exclude aws-sdk v2
   # Layer ARNs for referencing in functions
   layerArns:
     core: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-core-production:1
     apiDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-api-deps-production:1
     catalogDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-catalog-deps-production:1
-    webhooksDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-webhooks-deps-production:1
+    webhooksDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-webhooks-deps-production:5
     oauthDeps: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-oauth-deps-production:1
     square: arn:aws:lambda:us-west-1:367823798065:layer:joylabs-backend-api-v3-layers-square-production:1
 
@@ -274,4 +274,24 @@ resources:
         BillingMode: PAY_PER_REQUEST
         TimeToLiveSpecification:
           AttributeName: expires
-          Enabled: true 
+          Enabled: true
+
+    WebhooksTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: joylabs-backend-api-webhooks-v3-production
+        AttributeDefinitions:
+          - AttributeName: eventId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: eventId
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+
+    # NOTE: Ensure other tables like Users, Merchants are either defined here
+    # or managed outside this Serverless stack. The current IAM policy grants
+    # access based on constructed names, implying they might exist already.
+    # If they should be managed by this stack, add their definitions similarly. 

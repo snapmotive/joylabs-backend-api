@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "@aws-sdk/client-sns": "^3.775.0",
-    "body-parser": "^1.20.2"
+    "body-parser": "^1.20.2",
+    "expo-server-sdk": "^3.9.0"
   }
-} 
+}

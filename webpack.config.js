@@ -24,27 +24,15 @@ const apiDepsModules = [
   'jsonwebtoken',
 ];
 
-const catalogDepsModules = [
-  '@aws-sdk/client-s3',
-  'uuid',
-];
+const catalogDepsModules = ['@aws-sdk/client-s3', 'uuid'];
 
-const webhooksDepsModules = [
-  '@aws-sdk/client-sns',
-  'body-parser',
-];
+const webhooksDepsModules = ['@aws-sdk/client-sns', 'body-parser', 'expo-server-sdk'];
 
-const oauthDepsModules = [
-  '@aws-sdk/client-secrets-manager',
-  'axios',
-  'querystring',
-];
+const oauthDepsModules = ['@aws-sdk/client-secrets-manager', 'axios', 'querystring'];
 
-const squareLayerModules = [
-  'square',
-];
+const squareLayerModules = ['square'];
 
-// Combine all external modules
+// Combine all layer modules
 const allLayerModules = [
   ...coreLayerModules,
   ...apiDepsModules,
@@ -52,13 +40,14 @@ const allLayerModules = [
   ...webhooksDepsModules,
   ...oauthDepsModules,
   ...squareLayerModules,
-  'aws-sdk', // Still exclude v2
+  'aws-sdk', // Keep excluding v2 for safety, though layers should handle v3
 ];
 
 module.exports = {
   entry: slsw.lib.entries,
   target: 'node',
   mode: slsw.lib.webpack.isLocal ? 'development' : 'production',
+  cache: false,
   optimization: {
     minimize: true,
     minimizer: [
@@ -79,9 +68,24 @@ module.exports = {
   },
   devtool: 'source-map',
   externals: [
+    // Explicitly externalize ONLY the known layer modules
     nodeExternals({
-      // Exclude all layer dependencies from the bundle
-      allowlist: [/^(?!(@aws-sdk|aws-sdk|express|serverless-http|cookie-parser|cors|connect-dynamodb|express-session|morgan|joi|jsonwebtoken|uuid|body-parser|axios|querystring|square)).*/],
+      allowlist: moduleName => {
+        // If the module is NOT in our list of layer modules,
+        // it should NOT be externalized (i.e., it should be bundled).
+        // We return `false` to prevent externalization for non-layer modules.
+        // We return `true` (implicitly, by not returning false) for layer modules to externalize them.
+        // We use split('/')[0] to match base package names (e.g., '@aws-sdk/client-sns' matches '@aws-sdk')
+        // This might need refinement depending on specific package import styles
+        const baseModuleName = moduleName.split('/')[0];
+        if (!allLayerModules.includes(baseModuleName)) {
+          // console.log(`Bundling non-layer module: ${moduleName}`); // Debug logging
+          return false; // Bundle this module
+        }
+        // Otherwise, externalize it (module is in allLayerModules)
+        // console.log(`Externalizing layer module: ${moduleName}`); // Debug logging
+        // return true; // Default behavior if not false
+      },
     }),
   ],
   module: {
@@ -120,4 +124,4 @@ module.exports = {
     filename: '[name].js',
     sourceMapFilename: '[file].map',
   },
-}; 
+};
